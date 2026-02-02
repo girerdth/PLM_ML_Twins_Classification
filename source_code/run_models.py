@@ -33,7 +33,8 @@ from concurrent.futures import ThreadPoolExecutor
 # %% Own scripts
 from source_code.Dataset_Generator import prepare_data, get_latest_predict_dir, read_contours, find_contour_final
 import source_code.Grain_functions as Grain_functions
-from source_code.amplify_methods import select_orientation_folder, pseudo_imgs_generator
+from source_code.amplify_methods import select_orientation_folder, pseudo_imgs_generator, orientation_and_classification
+
 
 # %% Functions
 
@@ -562,6 +563,7 @@ def amplify_method(image_path, original_path):
 
     # Apply filters and save
     grains_image_path = os.path.join(final_folder, "masks", "Grains", image_name)
+    twins_image_path = os.path.join(final_folder, "masks", "Twins", image_name)
     grains_filtered = simple_filtered(grains_image_path)
     cv2.imwrite(grains_image_path, grains_filtered)
 
@@ -570,7 +572,7 @@ def amplify_method(image_path, original_path):
     both_advanced_filtered = advanced_filtered(both_filtered)
     cv2.imwrite(both_image_path, both_advanced_filtered)
 
+    final_image = orientation_and_classification(orientation_path, grains_image_path, twins_image_path, image_name)
     # Return final image
-    final_image = cv2.imread(os.path.join(final_folder, "masks", "Both", image_name))
 
     return final_image
