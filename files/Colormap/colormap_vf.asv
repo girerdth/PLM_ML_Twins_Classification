@@ -1,0 +1,275 @@
+% ===================================================
+% *** FUNCTION cielabplot
+% ***
+% *** function cielabplot
+% *** creates a CIELAB figure representation
+% *** see also cieplot
+% ===================================================
+function A=colormap_vf()
+figure; %plot([0 0],[-60 60],'k','LineWidth',2)
+hold on
+% plot([0 90],[0 0],'k','LineWidth',1)
+axis([-90 90 0 90])
+axis off
+box off
+set(gcf,'Color','white')
+gr = [0 0 0];
+r = [255/255 0 0];
+orange = [255/255 165/255 0];
+yellow = [1 255/255 0];
+green = [0/255 128/255 0/255];
+blue = [0 0 1];
+violet = [127/255 0 1];
+index = 0;
+% first quadrant
+index = index+1;
+a = 90;
+b = 0;
+ab(index,:)=[a b];
+col(index,:) = r;
+angles = (0 + (5/6)*(1/3)) : ((5/6)*(1/12)) : (30 - (5/6)*(1/3));
+weights = linspace(0, 1, length(angles)).^0.5;
+for j = 1:length(angles)
+    i = angles(j);
+    a = cos(3*i*pi/180)*90;
+    b = sin(3*i*pi/180)*90;
+    a1 = cos(i*pi/180)*90;
+    b2 = sin(i*pi/180)*90;
+    ab(index+j,:)=[a1 b2];
+    col(index+j, :) = (1 - weights(j)) * r + weights(j) * orange;
+end
+index = index + length(angles);
+a = sqrt(3)*90/2;
+b = 90/2;
+ab(index,:)=[a b];
+col(index,:) = orange;
+% grey
+index = index+1;
+a = 0;
+b = 0;
+ab(index,:)=[a b];
+col(index,:) = gr;
+col1 = col;
+ab1= ab;
+ 
+patch('Vertices',ab, 'Faces',[1:size(ab,1)], 'EdgeColor','none', ...
+    'FaceVertexCData',col,'FaceColor','interp')
+clear ab;clear col;
+ 
+index=0;
+% second quadrant
+index = index+1;
+a = sqrt(3)*90/2;
+b = 90/2;
+ab(index,:)=[a b];
+col(index,:) = orange;
+angles = (30 + (5/6)*(1/3)) : ((5/6)*(1/12)) : (60 - (5/6)*(1/3));
+weights = linspace(0, 1, length(angles)).^0.75;
+for j = 1:length(angles)
+    i = angles(j);
+    a = cos(3*i*pi/180)*90;
+    b = sin(3*i*pi/180)*90;
+    a1 = cos(i*pi/180)*90;
+    b2 = sin(i*pi/180)*90;
+    ab(index+j,:)=[a1 b2];
+    col(index+j, :) = (1 - weights(j)) * orange + weights(j) * yellow;
+end
+index = index + length(angles);
+a = 90/2;
+b = sqrt(3)*90/2;
+ab(index,:)=[a b];
+col(index,:) = yellow;
+% grey
+index = index+1;
+a = 0;
+b = 0;
+ab(index,:)=[a b];
+col(index,:) = gr;
+
+col2 = col;
+ab2 = ab;
+ 
+ 
+patch('Vertices',ab, 'Faces',[1:size(ab,1)], 'EdgeColor','none', ...
+    'FaceVertexCData',col,'FaceColor','interp')
+clear ab;clear col;
+ 
+index=0;
+% third quadrant
+index = index+1;
+a = 90/2;
+b = sqrt(3)*90/2;
+ab(index,:)=[a b];
+col(index,:) = yellow;
+angles = (60 + (5/6)*(1/3)) : ((5/6)*(1/12)) : (90 - (5/6)*(1/3));
+weights = linspace(0, 1, length(angles)).^0.25;
+for j = 1:length(angles)
+    i = angles(j);
+    a = cos(3*i*pi/180)*90;
+    b = sin(3*i*pi/180)*90;
+    a1 = cos(i*pi/180)*90;
+    b2 = sin(i*pi/180)*90;
+    ab(index+j,:)=[a1 b2];
+    col(index+j, :) = (1 - weights(j)) * yellow + weights(j) * green;
+end
+index = index + length(angles);
+
+a = 0;
+b = 90;
+ab(index,:)=[a b];
+col(index,:) = green;
+% grey
+index = index+1;
+a = 0;
+b = 0;
+ab(index,:)=[a b];
+col(index,:) = gr;
+
+patch('Vertices',ab, 'Faces',[1:size(ab,1)], 'EdgeColor','none', ...
+    'FaceVertexCData',col,'FaceColor','interp')
+clear ab;clear col;
+
+index=0;
+% fourth quadrant
+index = index+1;
+a = 0;
+b = 90;
+ab(index,:)=[a b];
+col(index,:) = green;
+angles = (90 + (5/6)*(1/3)) : ((5/6)*(1/12)) : (120 - (5/6)*(1/3));
+weights = linspace(0, 1, length(angles)).^0.5;
+for j = 1:length(angles)
+    i = angles(j);
+    a = cos(3*i*pi/180)*90;
+    b = sin(3*i*pi/180)*90;
+    a1 = cos(i*pi/180)*90;
+    b2 = sin(i*pi/180)*90;
+    ab(index+j,:)=[a1 b2];
+    col(index+j, :) = (1 - weights(j)) * green + weights(j) * blue;
+end
+index = index + length(angles);
+a = -90/2;
+b = sqrt(3)*90/2;
+ab(index,:)=[a b];
+col(index,:) = blue;
+% grey
+index = index+1;
+a = 0;
+b = 0;
+ab(index,:)=[a b];
+col(index,:) = gr;
+ 
+patch('Vertices',ab, 'Faces',[1:size(ab,1)], 'EdgeColor','none', ...
+    'FaceVertexCData',col,'FaceColor','interp')
+clear ab;clear col;
+
+index=0;
+% fourth quadrant
+index = index+1;
+a = -90/2;
+b = sqrt(3)*90/2;
+ab(index,:)=[a b];
+col(index,:) = blue;
+angles = (120 + (5/6)*(1/3)) : ((5/6)*(1/12)) : (150 - (5/6)*(1/3));
+weights = linspace(0, 1, length(angles)).^3;
+for j = 1:length(angles)
+    i = angles(j);
+    a = cos(3*i*pi/180)*90;
+    b = sin(3*i*pi/180)*90;
+    a1 = cos(i*pi/180)*90;
+    b2 = sin(i*pi/180)*90;
+    ab(index+j,:)=[a1 b2];
+    col(index+j, :) = (1 - weights(j)) * blue + weights(j) * violet;
+end
+index = index + length(angles);
+a = -sqrt(3)*90/2;
+b = 90/2;
+ab(index,:)=[a b];
+col(index,:) = violet;
+% grey
+index = index+1;
+a = 0;
+b = 0;
+ab(index,:)=[a b];
+col(index,:) = gr;
+ 
+patch('Vertices',ab, 'Faces',[1:size(ab,1)], 'EdgeColor','none', ...
+    'FaceVertexCData',col,'FaceColor','interp')
+clear ab;clear col;
+
+index=0;
+% fourth quadrant
+index = index+1;
+a = -sqrt(3)*90/2;
+b = 90/2;
+ab(index,:)=[a b];
+col(index,:) = violet;
+angles = (150 + (5/6)*(1/3)) : ((5/6)*(1/12)) : (180 - (5/6)*(1/3));
+weights = linspace(0, 1, length(angles)).^3;
+for j = 1:length(angles)
+    i = angles(j);
+    a = cos(3*i*pi/180)*90;
+    b = sin(3*i*pi/180)*90;
+    a1 = cos(i*pi/180)*90;
+    b2 = sin(i*pi/180)*90;
+    ab(index+j,:)=[a1 b2];
+    col(index+j, :) = (1 - weights(j)) * violet + weights(j) * r;
+end
+index = index + length(angles);
+a = -90;
+b = 0;
+ab(index,:)=[a b];
+col(index,:) = r;
+% grey
+index = index+1;
+a = 0;
+b = 0;
+ab(index,:)=[a b];
+col(index,:) = gr;
+ 
+patch('Vertices',ab, 'Faces',[1:size(ab,1)], 'EdgeColor','none', ...
+    'FaceVertexCData',col,'FaceColor','interp')
+clear ab;clear col;
+% index=0;
+% % fourth quadrant
+% index = index+1;
+% a = -90/sqrt(2);
+% b = 90/sqrt(2);
+% ab(index,:)=[a b];
+% col(index,:) = bl;
+% for i=137.5:2.5:177.5
+%     index = index+1;
+%     a = cos(2*i*pi/180)*90;
+%     b = sin(2*i*pi/180)*90;
+%     a1 = cos(i*pi/180)*90;
+%     b2 = sin(i*pi/180)*90;
+%     ab(index,:)=[a1 b2];
+%     c = (a*r+(90-a)*bl)/90;
+%     col(index,:)=c; 
+% end
+% index = index+1;
+% a = -90;
+% b = 0;
+% ab(index,:)=[a b];
+% col(index,:) = r;
+% % grey
+% index = index+1;
+% a = 0;
+% b = 0;
+% ab(index,:)=[a b];
+% col(index,:) = gr;
+% 
+% patch('Vertices',ab, 'Faces',[1:size(ab,1)], 'EdgeColor','none', ...
+%     'FaceVertexCData',col,'FaceColor','interp')
+% clear ab;
+pbaspect([2 1 1]);
+F = getframe(gca);
+A = frame2im(F); 
+exportgraphics(gca,'2D_Colormap.png','Resolution',1200)
+end
+% plot([0 0],[-60 60],'k','LineWidth',2)
+% plot([-60 60],[0 0],'k','LineWidth',2)
+
+% ====================================================
+% *** END FUNCTION cband
+% ====================================================

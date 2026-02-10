@@ -7,58 +7,673 @@ from tkinter import filedialog, messagebox
 import glob
 import re
 import math
+import copy
+import time
+from matplotlib.patches import Polygon as MplPolygon
+import matplotlib.pyplot as plt
+from matplotlib.patches import Ellipse
 
-
-from skimage.morphology import skeletonize, thin
-from skan.csr import skeleton_to_csgraph
-from skan import Skeleton, summarize
-
-import numpy as np
-from skimage.morphology import skeletonize
-from skan import Skeleton, summarize
-from skan.csr import skeleton_to_csgraph
-from skimage.draw import disk as draw_disk
-from skimage.morphology import erosion, square
-from collections import Counter
-
-# Numerical and Image Processing
-import numpy as np
-import cv2
-from scipy.signal import find_peaks
-from scipy.interpolate import UnivariateSpline
-from scipy.spatial import ConvexHull
+# Geometry
+from shapely.geometry import Polygon, LineString, Point
+from shapely.validation import make_valid
+from shapely.errors import ShapelyError
+from shapely.strtree import STRtree
 
 # Skimage
 from skimage import io, img_as_ubyte
 from skimage.filters.rank import modal
 from skimage.morphology import square, skeletonize, dilation, disk
 from skimage.measure import label, regionprops, find_contours
+from skimage.morphology import skeletonize, thin
+from skimage.draw import disk as draw_disk
+from skimage.morphology import erosion, square
+from skimage.draw import polygon
 
-# Plotting
-import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon as MplPolygon
-import matplotlib.pyplot as plt
-from matplotlib.patches import Polygon as MplPolygon
+from skan.csr import skeleton_to_csgraph
+from skan import Skeleton, summarize
 
-# Geometry
-from shapely.geometry import Polygon, LineString, Point
-from shapely.validation import make_valid
-from shapely.errors import ShapelyError
+from scipy.signal import find_peaks
+from scipy.interpolate import UnivariateSpline
+from scipy.spatial import ConvexHull
 
 # External Tools
 from ultralytics import YOLO
 import alphashape
 from tqdm import tqdm
 
-# Project-Specific
+# %% Own scripts
 from source_code.Grain_functions import find_grain_by_ID, find_grain_by_ID_index, merge_grain, decompose_twins_grains, decompose_twins_grains_2
-from source_code.Dataset_Generator import get_latest_predict_dir, prepare_data, read_contours, find_contour_final
 from source_code import Grain_functions
+from source_code import Grain_Orientation
 # from Test import get_integer_points_inside_contour  # Optional
 from source_code.pseudoimage import apply_clahe, adjust_contrast, normalize_images_all
-from matplotlib.patches import Ellipse
+
 
 # %% Functions
+
+def safe_summarize_skeleton2(skeleton_img):
+    """
+    Safely summarize a skeletonized image.
+    Keeps only the longest branch if multiple are present.
+
+    Args:
+        skeleton_img (np.ndarray): Binary skeleton image.
+
+    Returns:
+        pd.DataFrame | None: Summary of longest branch, or None if empty/error.
+    """
+    # Check if skeleton has any nonzero pixels
+    if not np.any(skeleton_img):
+        print("⚠ Skeleton is empty, skipping.")
+        return None
+
+    try:
+        # Summarize skeleton
+        branch_data = summarize(Skeleton(skeleton_img), separator='_')
+
+        if branch_data is None or len(branch_data) == 0:
+            return None
+
+        # If multiple branches, keep only the longest
+        if len(branch_data) > 1:
+            longest_idx = branch_data['branch_distance'].idxmax()
+            branch_data = branch_data.loc[[longest_idx]]
+
+        return branch_data.reset_index(drop=True)
+
+    except ValueError as e:
+        print(f"⚠ Error processing skeleton: {e}")
+        return None
+
+def grain_twin_analysis(grain, grains, image_shape, Zfinal, Average_Size, background=None):
+    skeleton = get_skeleton(grain, image_shape)
+    skel, branches = get_branches(skeleton)
+
+    branch_data = safe_summarize_skeleton2(skeleton)
+
+    type_issue = -1
+
+    endpoints, centroido = get_branch_endpoints_centroid(skel, branch_data, grain)
+    neighbour_ids = grain.Neighbours
+    centroids = compute_centroids(neighbour_ids, grains)
+    centroids2 = copy.deepcopy(centroids)
+    branch_results = []
+
+    neighs_left_ID = []
+    neighs_right_ID = []
+
+    Parents = False
+    if grain.ID == 94:
+        piopipo = 3
+    neighs_left = []
+    neighs_right = []
+    neighs_left_length = []
+    neighs_right_length = []
+    points = endpoints[0]
+
+    for nid, centroid in centroids.items():
+        if nid == 70:
+            kk = 1
+        if is_projection_inside_segment(np.array(points[0]), np.array(points[1]), centroid):
+            length, left = is_left_or_right(np.array(points[0]), np.array(points[1]), centroid)
+            if left:
+                neighs_left_length.append(length)
+                neighs_left_ID.append(nid)
+                neighs_left.append(find_grain_by_ID(grains, nid))
+
+            else:
+                neighs_right_length.append(length)
+                neighs_right_ID.append(nid)
+                neighs_right.append(find_grain_by_ID(grains, nid))
+
+        if nid in centroids2:
+            del centroids2[nid]
+
+    if (len(neighs_left) == 1 and len(neighs_right) == 1):
+        Azimuth_P, Incli_P, Parents = check_friends(neighs_left[0], neighs_right[0])
+
+        if Parents == True:
+            grain, miso, type_error = check_twin_type(grain, Azimuth_P, Incli_P)
+            grain.MisOrientation = miso
+            type_issue = type_error
+        else:
+            type_issue = 2
+
+    elif (len(neighs_left) == 0 and len(neighs_right) == 1) or (len(neighs_left) == 1 and len(neighs_right) == 0):
+        if len(neighs_right) == 1:
+            Azimuth_P = neighs_right[0].Azimuth
+            Incli_P = neighs_right[0].Inclination
+
+            Parents = True
+        if len(neighs_left) == 1:
+            Azimuth_P = neighs_left[0].Azimuth
+            Incli_P = neighs_left[0].Inclination
+
+            Parents = True
+        if Parents == True:
+            grain, miso, type_error = check_twin_type(grain, Azimuth_P, Incli_P)
+            grain.MisOrientation = miso
+            type_issue = type_error
+
+    elif (len(neighs_left) >= 2 or len(neighs_right) >= 2):
+        type_issue = 1
+
+    elif (len(neighs_left) == 0 and len(neighs_right) == 0):
+        type_issue = 0
+
+    return grain, type_issue
+
+def separate_twin(grain, neighs_left, neighs_right, image_shape, maxID, skeleton_grains):
+    mask = np.zeros(image_shape)
+
+    pixel_list = np.array(neighs_left.PixelList, dtype=int)  # Ensures integers
+    pixel_list2 = np.array(neighs_right.PixelList, dtype=int)  # Ensures integers
+
+    pixel_list = np.concatenate((pixel_list, pixel_list2))
+
+    hull = ConvexHull(pixel_list)
+    # Extract hull vertices
+    hull_points = pixel_list[hull.vertices]
+
+    # Separate coordinates (Note: PixelList may be in (row, col) = (y, x) order)
+    rr, cc = polygon(hull_points[:, 0], hull_points[:, 1], shape=image_shape)
+
+    # Fill mask inside hull
+    mask[rr, cc] = 1
+
+    mask2 = np.zeros(image_shape)
+    pixel_list = np.array(grain.PixelList, dtype=int)  # Ensures integers
+    mask2[pixel_list[:, 0], pixel_list[:, 1]] = 1
+
+    mask_total = mask + mask2
+
+    # Get the coordinates where mask_total equals 2
+    rows, cols = np.where(mask_total == 2)
+
+    mask3 = np.zeros(image_shape)
+    mask3[rows, cols] = 1
+    contours = find_contours(mask3, 0.5)
+    if len(contours) > 1:
+        # Calculate the length of each contour (using number of points as a simple proxy)
+        contour_lengths = [len(contour) for contour in contours]
+        # Find the index of the longest contour
+        longest_contour_index = np.argmax(contour_lengths)
+        # Keep only the longest contour
+        contours = [contours[longest_contour_index]]
+
+    new_granulo = []
+    contour_points_list = []
+    for contour in contours:
+        contour = np.round(contour).astype(int)
+        contour = np.flip(contour)
+        cv2.fillPoly(skeleton_grains, [contour], 0)  # Fill the interior of the contour with 0
+        cv2.drawContours(skeleton_grains, [contour], -1, (255), thickness=1)  # Draw the contour lines
+        contour_points = []
+        contour = np.flip(contour)
+        for point in contour:
+            y, x = point
+            corrected_x = max(0, round(x))
+            corrected_y = max(0, round(y))
+            contour_points.append((corrected_x, corrected_y))
+
+        contour_points_list.append(contour_points)
+
+    for i, contour in enumerate(contour_points_list):
+        contour2 = np.array(contour, np.int32)
+        points_inside = Grain_functions.get_integer_points_inside_contour(contour2)
+        points = np.array(points_inside, dtype=np.int32)
+        final_points = (points[:, 1], points[:, 0])
+        final_pts = np.array(final_points)
+        contour_array = np.array(contour, dtype=np.int32)
+        center_x = np.mean(points[:, 0])
+        center_y = np.mean(points[:, 1])
+        gr = Grain_functions.Grain(final_pts, contour_array, (center_y, center_x), len(points[:, 0]), 1, grain.ID)
+        gr.PixelList = [(int(y), int(x)) for x, y in points]
+        gr.is_twinning(True)
+        gr.DilatedContourPoints = contour_array
+        gr.Dad = neighs_left.ID
+        gr.Mum = neighs_right.ID
+        gr.Neighbours = grain.Neighbours
+
+    the_goat = gr
+    mask2[mask_total == 2] = 0
+    contours = find_contours(mask2, 0.5)
+    contour_points_list = []
+    for contour in contours:
+        contour = np.round(contour).astype(int)
+        contour = np.flip(contour)
+        cv2.fillPoly(skeleton_grains, [contour], 0)  # Fill the interior of the contour with 0
+        cv2.drawContours(skeleton_grains, [contour], -1, (255), thickness=1)  # Draw the contour lines
+        contour_points = []
+        contour = np.flip(contour)
+        for point in contour:
+            y, x = point
+            corrected_x = max(0, round(x))
+            corrected_y = max(0, round(y))
+            contour_points.append((corrected_x, corrected_y))
+
+        contour_points_list.append(contour_points)
+    for i, contour in enumerate(contour_points_list):
+        contour2 = np.array(contour, np.int32)
+        points_inside = Grain_functions.get_integer_points_inside_contour(contour2)
+        points = np.array(points_inside, dtype=np.int32)
+
+        contour_array = np.array(contour, dtype=np.int32)
+        center_x = np.mean(points[:, 0])
+        center_y = np.mean(points[:, 1])
+        if len(points[:, 0]) >= 10:
+            gr = Grain_functions.Grain(final_pts, contour_array, (center_y, center_x), len(points[:, 0]), 1,
+                                       maxID + i + 1)
+            gr.PixelList = [(int(y), int(x)) for x, y in points]
+            gr.DilatedContourPoints = contour_array
+            gr.is_twinning(True)
+            gr.Neighbours = grain.Neighbours
+            new_granulo.append(gr)
+
+    # Stack the coordinates to get a list of (row, col) pairs
+
+    return the_goat, new_granulo
+
+
+def find_max_ID(grains):
+    max_ID = 0
+    for gr in grains:
+        if gr.ID > max_ID:
+            max_ID = gr.ID
+
+    return max_ID
+
+
+def misorientation_angle(euler1, euler2, m, degrees=True):
+    """
+    Compute misorientation angle between two orientations given as Euler triplets.
+    """
+
+    euler1 = np.array(euler1)
+    euler2 = np.array(euler2)
+    if m == 1:
+        euler1[0] = euler1[0] + 180
+    if m == 2:
+        euler1[0] = euler1[0] + 180
+        euler2[0] = euler2[0] + 180
+    if m == 3:
+        # euler1[0] = euler1[0] + 180
+        euler2[0] = euler2[0] + 180
+    if m == 4:
+        euler2[1] = 180 - euler2[1]
+    if m == 5:
+        euler1[0] = euler1[0] + 180
+        euler2[1] = 180 - euler2[1]
+    if m == 6:
+        euler1[0] = euler1[0] + 180
+        euler2[0] = euler2[0] + 180
+        euler2[1] = 180 - euler2[1]
+    if m == 7:
+        euler2[0] = euler2[0] + 180
+        euler2[1] = 180 - euler2[1]
+    if m == 8:
+        euler1[1] = 180 - euler1[1]
+    if m == 9:
+        euler1[0] = euler1[0] + 180
+        euler1[1] = 180 - euler1[1]
+    if m == 10:
+        euler1[0] = euler1[0] + 180
+        euler2[0] = euler2[0] + 180
+        euler1[1] = 180 - euler1[1]
+    if m == 11:
+        euler2[0] = euler2[0] + 180
+        euler1[1] = 180 - euler1[1]
+    if m == 12:
+        euler1[1] = 180 - euler1[1]
+        euler2[1] = 180 - euler2[1]
+    if m == 13:
+        euler1[0] = euler1[0] + 180
+        euler1[1] = 180 - euler1[1]
+        euler2[1] = 180 - euler2[1]
+    if m == 14:
+        euler1[0] = euler1[0] + 180
+        euler2[0] = euler2[0] + 180
+        euler1[1] = 180 - euler1[1]
+        euler2[1] = 180 - euler2[1]
+    if m == 15:
+        euler2[0] = euler2[0] + 180
+        euler1[1] = 180 - euler1[1]
+        euler2[1] = 180 - euler2[1]
+
+    euler1 = tuple(euler1)
+    euler2 = tuple(euler2)
+
+    error_angle = final_angle(euler1[0], euler1[1], euler2[0], euler2[1])
+
+    return error_angle
+
+def rotx(angle_deg):
+    angle_rad = np.deg2rad(angle_deg)
+    c, s = np.cos(angle_rad), np.sin(angle_rad)
+    return np.array([[1, 0, 0],
+                     [0, c, -s],
+                     [0, s, c]])
+
+def rotz(angle_deg):
+    angle_rad = np.deg2rad(angle_deg)
+    c, s = np.cos(angle_rad), np.sin(angle_rad)
+    return np.array([[c, -s, 0],
+                     [s,  c, 0],
+                     [0,  0, 1]])
+
+
+# --- Step 5: Project and classify neighbour ---
+def is_projection_inside_segment(pt1, pt2, centroid, tol=1e-2):
+    vec = pt2 - pt1
+    pt1 = np.array(pt1)
+    pt2 = np.array(pt2)
+    direction = pt2 - pt1
+    shortened_pt1 = pt2 - 0.95 * direction
+    shortened_pt2 = pt1 + 0.95 * direction
+
+    vec2 = shortened_pt2 - shortened_pt1
+    norm2 = np.linalg.norm(vec2)
+    vec_norm = vec2 / norm2
+    proj_length = np.dot(centroid - shortened_pt1, vec_norm)
+    proj_point = shortened_pt1 + proj_length * vec_norm
+    return 0 - tol <= proj_length <= norm2
+
+
+def is_left_or_right(pt1, pt2, centroid, tol=1e-2):
+    vec = pt2 - pt1
+    pt1 = np.array(pt1)
+    pt2 = np.array(pt2)
+    direction = pt2 - pt1
+    shortened_pt1 = pt2 - 0.95 * direction
+    shortened_pt2 = pt1 + 0.95 * direction
+
+    vec2 = shortened_pt2 - shortened_pt1
+    norm2 = np.linalg.norm(vec2)
+    vec_norm2 = vec2 / norm2
+
+    vec_norm = vec / np.linalg.norm(vec)
+
+    proj_length = np.dot(centroid - shortened_pt1, vec_norm2)
+    proj_point = shortened_pt1 + proj_length * vec_norm2
+
+    vec3 = centroid - proj_point
+    norm3 = np.linalg.norm(vec3)
+    final_vec3 = vec3 / norm3
+
+    k = np.cross(np.array([vec_norm2[0], vec_norm2[1], 0]), np.array([final_vec3[0], final_vec3[1], 0]))
+
+    if k[2] >= 0:
+        return proj_length, True
+    else:
+        return proj_length, False
+
+
+def misorentation_between_angles(grain1, grain2):
+    A = []
+
+    phi1 = grain1.Azimuth
+    Phi = grain1.Inclination
+
+    phi11 = grain2.Azimuth
+    Phi1 = grain2.Inclination
+
+    Euler1 = (phi11, Phi1, 0)
+    Euler2 = (phi1, Phi1, 0)
+
+    angles = np.zeros(16)
+
+    for poss in range(16):
+        angles[poss] = misorientation_angle(Euler1, Euler2, poss, degrees=True)
+
+    return angles
+
+
+def check_twin_type(grain, Azimuth_P, Incli_P, Error_Angle=10):
+    A = []
+
+    phi1 = grain.Azimuth
+    Phi = grain.Inclination
+
+    phi11 = Azimuth_P
+    Phi1 = Incli_P
+
+    Euler1 = (Azimuth_P, Incli_P, 0)
+    Euler2 = (phi1, Phi, 0)
+
+    angle_C1 = 64.60
+    angle_C2 = 57.05
+    angle_T1 = 84.78
+    angle_T2 = 35.10
+    type_error = -1
+    miso = []
+
+    for poss in range(16):
+        angle = misorientation_angle(Euler1, Euler2, poss, degrees=True)
+        miso.append(angle)
+
+    # Track what was found
+    found_types = set()
+
+    miso = np.array(miso)  # ensure it's an ndarray
+
+    if np.any((miso <= angle_T1 + Error_Angle / 2) & (miso >= angle_T1 - Error_Angle / 2)):
+        found_types.add("Tension")
+    if np.any((miso <= angle_T2 + Error_Angle / 2) & (miso >= angle_T2 - Error_Angle / 2)):
+        found_types.add("Tension")
+
+    if np.any((miso <= angle_C1 + Error_Angle / 2) & (miso >= angle_C1 - Error_Angle / 2)):
+        found_types.add("Compression")
+    if np.any((miso <= angle_C2 + Error_Angle / 2) & (miso >= angle_C2 - Error_Angle / 2)):
+        found_types.add("Compression")
+
+    # Check results
+    if len(found_types) == 0:
+        type_error = 3
+
+    if len(found_types) == 1:
+        grain.TwinType = found_types.pop()
+
+    if len(found_types) >= 2:
+        type_error = 4
+
+    return grain, miso, type_error
+
+
+def check_friends(studied_grain, studied_grain2, Error_Angle=10):
+    A = []
+
+    phi1 = studied_grain.Azimuth
+    Phi = studied_grain.Inclination
+    id1 = studied_grain.ID
+    phi11 = studied_grain2.Azimuth
+    Phi1 = studied_grain2.Inclination
+    id2 = studied_grain2.ID
+    phi21 = 0
+    Azimuth = 0
+    Inclination = 0
+
+    Euler1 = (phi1, Phi, 0)
+    Euler2 = (phi11, Phi1, 0)
+
+    TotalSize = studied_grain.size + studied_grain2.size
+
+    for poss in range(16):
+        A.append(misorientation_angle(Euler1, Euler2, poss, degrees=True))
+
+    CosTheta = np.min(A)
+    CosTheta = CosTheta % 180
+
+    if CosTheta <= Error_Angle:
+        # Choose the larger grain based on size
+        if studied_grain.size >= studied_grain2.size:
+            Azimuth = phi1
+            Inclination = Phi
+        else:
+            Azimuth = phi11
+            Inclination = Phi1
+
+        return Azimuth, Inclination, True
+    else:
+        # Return the same larger-grain orientation even if condition fails
+        if studied_grain.size >= studied_grain2.size:
+            Azimuth = phi1
+            Inclination = Phi
+        else:
+            Azimuth = phi11
+            Inclination = Phi1
+
+        return Azimuth, Inclination, False
+
+def final_angle(azi_ejm, incli_ejm, azi_ebsd, incli_ebsd):
+    point1 = np.array([0, 0, 1])  # Optical axis
+
+    # EJM orientation
+    PR = rotz(0) @ point1
+    PR = rotx(incli_ejm) @ PR
+    PR = rotz(azi_ejm) @ PR
+
+    # EBSD orientation
+    PRA = rotz(0) @ point1
+    PRA = rotx(incli_ebsd) @ PRA
+    PRA = rotz(azi_ebsd) @ PRA
+
+    # Angle between vectors
+    dot_product = np.clip(np.dot(PRA, PR), -1.0, 1.0)  # Clip to avoid numerical issues
+    error_angle = np.rad2deg(np.arccos(dot_product))
+
+    return error_angle
+
+def final_angle_rot(azi_ejm, incli_ejm, rot_ejm, azi_ebsd, incli_ebsd, rot_ebsd):
+    point1 = np.array([0, 0, 1])  # Optical axis
+
+    # EJM orientation
+    PR = rotz(rot_ejm) @ point1
+    PR = rotx(incli_ejm) @ PR
+    PR = rotz(azi_ejm) @ PR
+
+    # EBSD orientation
+    PRA = rotz(rot_ebsd) @ point1
+    PRA = rotx(incli_ebsd) @ PRA
+    PRA = rotz(azi_ebsd) @ PRA
+
+    # Angle between vectors
+    dot_product = np.clip(np.dot(PRA, PR), -1.0, 1.0)  # Clip to avoid numerical issues
+    error_angle = np.rad2deg(np.arccos(dot_product))
+
+    return error_angle
+
+def subtract_contours_from_skeleton(skeleton, contours):
+    """
+    Remove filled contours from skeleton.
+    """
+    skeleton = skeleton.copy()
+
+    for contour in contours:
+        cv2.fillPoly(skeleton, [contour], 0)
+        cv2.drawContours(skeleton, [contour], -1, 255, 1)
+
+    return skeleton
+
+def extract_grains_from_skeleton(
+    skeleton,
+    pad=0,
+    dilation_kernel=(3, 3),
+    contour_shift=(0, 0),
+    start_id=1,
+    mark_twinning=False
+):
+    """
+    Extract Grain objects from a skeleton image.
+    """
+    if pad > 0:
+        skeleton = np.pad(skeleton, pad, constant_values=1)
+
+    kernel = np.ones(dilation_kernel, np.uint8)
+    dilated = cv2.dilate(skeleton, kernel, iterations=1)
+
+    labels = label(~dilated.astype(bool))
+    contours = find_contours(labels, 0.5)
+
+    grains = []
+
+    for i, contour in enumerate(contours):
+        contour = np.round(contour).astype(int)
+        contour = np.flip(contour, axis=1)
+
+        # Undo padding if needed
+        contour[:, 0] -= contour_shift[0]
+        contour[:, 1] -= contour_shift[1]
+
+        # Interior points
+        points_inside = Grain_functions.get_integer_points_inside_contour(contour)
+        points = np.asarray(points_inside, dtype=np.int32)
+
+        if len(points) == 0:
+            continue
+
+        center = points.mean(axis=0)
+
+        gr = Grain_functions.Grain(
+            points,
+            contour,
+            tuple(center),
+            len(points),
+            1,
+            start_id + i
+        )
+
+        if mark_twinning:
+            gr.is_twinning(True)
+
+        grains.append(gr)
+
+    return grains
+
+def skeletonize_binary(binary_img):
+    """
+    Skeletonize a binary image and return uint8 (0 or 255)
+    """
+    ske = skeletonize(binary_img.astype(bool))
+    return (ske.astype(np.uint8) * 255)
+
+def delete_small_twins(Grains):
+    index = []
+
+    for i, gr in enumerate(Grains):
+        if gr.IsTwin == True:
+            if gr.size <= 5:
+                index.append(i)
+
+    for m in index:
+        Grains.pop(m)
+
+    return Grains
+
+def poly_line(gr):
+    pts = gr.ContourPoints
+
+    # 1) Build the raw geometry
+    if len(pts) >= 3:
+        geom = Polygon(pts)
+    elif len(pts) == 2:
+        geom = LineString(pts)
+    elif len(pts) == 1:
+        geom = Point(pts[0])
+    else:
+        # no points → return an empty geometry
+        return Point()
+
+    # 2) Try to make it valid
+    try:
+        # preferred in Shapely 2.x
+        geom = make_valid(geom)
+    except (ImportError, AttributeError, ShapelyError):
+        # fallback for older Shapely versions or any failure
+        if not geom.is_valid:
+            geom = geom.buffer(0)
+
+    return geom
+
 
 def check_peaks(grains):
     """
@@ -84,48 +699,45 @@ def check_peaks(grains):
 
     print("✅ All grains passed Inclination integrity check.")
 
-def gray_mean(grain_stats, folder):
 
+def gray_mean(grain_stats, folder):
     files = sorted(glob.glob(os.path.join(folder, '*.png')), key=extract_number2)
+    if not files: return grain_stats, np.array([])
+
+    # Get dimensions from the first image
+    sample_img = cv2.imread(files[0], cv2.IMREAD_GRAYSCALE)
+    h, w = sample_img.shape
+
     num_grains = len(grain_stats)
     num_images = len(files)
+    gray_mean_array = np.zeros((num_grains, num_images), dtype=np.float32)
 
-    gray_mean_array = np.zeros((num_grains, num_images))
-    grain_positions = np.zeros((num_grains, 2))
-    count = np.zeros(num_grains)
-    images = []
+    # Precompute indices with safety clipping
+    grain_pixels = []
+    for grain in grain_stats:
+        pixels = np.asarray(grain.PixelList, dtype=np.int32)
+        # Assuming PixelList is [x, y]
+        x_idx = np.clip(pixels[:, 0], 0, w - 1)
+        y_idx = np.clip(pixels[:, 1], 0, h - 1)
+        grain_pixels.append((y_idx, x_idx))
 
-    # -------------------- IMAGE PREPROCESSING --------------------
-    for m in range(num_images):
-        image = cv2.imread(files[m], cv2.IMREAD_GRAYSCALE)
-        images.append(image)
-    images_final = normalize_images_all(images)
+    # Process images
+    for img_idx, fname in enumerate(tqdm(files, desc="Calculating Gray Means")):
+        image = cv2.imread(fname, cv2.IMREAD_GRAYSCALE)
+        for i, (y, x) in enumerate(grain_pixels):
+            # Rapid vectorized mean for this grain
+            gray_mean_array[i, img_idx] = np.mean(image[y, x])
 
-    # -------------------- GRAIN PROCESSING --------------------
-    for img_idx in range(num_images):
-        image = images_final[img_idx]
-        for i, grain in enumerate(grain_stats):
-            pixels = np.array(grain.PixelList)
-            y = pixels[:, 1].astype(int)
-            x = pixels[:, 0].astype(int)
-
-            gray_values = image[y, x]
-            gray_mean_array[i, img_idx] = np.mean(gray_values)
-            grain_positions[i] = [np.mean(x), np.mean(y)]
-
-    # -------------------- UPDATE GRAIN STATS --------------------
     for i, grain in enumerate(grain_stats):
-        grain.Position = grain_positions[i]
+        # Update grain with the new mean array
         grain.GrayMean = gray_mean_array[i]
-        count[i] = np.sum(grain.GrayMean < 10)
+        # Calculate centroid if needed
+        y_idx, x_idx = grain_pixels[i]
+        grain.Position = (np.mean(x_idx), np.mean(y_idx))
 
-    result = np.mean(gray_mean_array, axis=0)
-
-    return grain_stats, result
-
+    return grain_stats, gray_mean_array.mean(axis=0)
 
 def select_orientation_folder(original_path, current_directory):
-    print(original_path)
     root = tk.Tk()
     root.withdraw()
 
@@ -192,89 +804,60 @@ def pseudo_imgs_generator(orientation_path, random_flag):
     return pseudo_imgs, SizeIm
 
 
-def Peaks(Grainstats, initial_s=50, s_increment=20, max_threshold=254):
+def Peaks_Optimized(Grainstats, initial_s=50, target_mean=122.5):
     """
-    Estimate peak orientations for grains using a smoothing spline.
-    If the maximum amplitude across all grains exceeds `max_threshold`,
-    the smoothing parameter `s` is increased by `s_increment` and recalculation is performed.
-
-    Parameters:
-    - Grainstats: list of objects with attributes GrayMean (list of gray values) and ID,
-                  and method set_orientation(azimuth, inclination)
-    - initial_s: starting smoothing factor for UnivariateSpline
-    - s_increment: how much to increase smoothing factor if threshold exceeded
-    - max_threshold: amplitude threshold to adjust smoothing
-
-    Returns:
-    - Grainstats with orientations set
+    High-speed peak orientation estimation for metallurgical grains.
+    Uses a fixed max_amplitude of 255 for 8-bit orientation scaling.
     """
-    s_val = initial_s
-    while True:
-        Amps = []
-        locations = []
+    MAX_AMP_FIXED = 255
+    # x_input: 0, 10, 20... 350 (36 points)
+    x_input = np.arange(0, 360, 10)
+    # x_fine: 0.1 degree resolution (3600 points) - 10x faster than 0.01
+    x_fine = np.arange(0, 360, 0.1)
 
-        # Loop over grains to compute amplitudes and locations
-        for grain in Grainstats:
+    for grain in Grainstats:
+        # 1. Pre-processing & Vectorized Shifting
+        gray = np.array(grain.GrayMean)
+        gray = gray + (target_mean - np.mean(gray))
 
-            gray = np.array(grain.GrayMean)
-            # handle 37-point wrap-around
-            if gray.size == 37:
-                gray = gray[:-1]
-            if gray.size == 19:
-                gray = gray[:-1]
-            # extend data for circularity
-            testGray_extended = np.tile(gray, 2)
+        # Ensure data length matches x_input (36 points)
+        if gray.size > 36:
+            gray = gray[:36]
+        elif gray.size < 36:
+            # Pad with mean if data is unexpectedly short
+            gray = np.pad(gray, (0, 36 - gray.size), mode='mean')
 
-            x2 = np.arange(0, 360, 10)
-            x1_full = np.arange(0, 360, 0.01)
+        # 2. Spline Fitting
+        # Tile twice to handle circularity/wrap-around properly
+        gray_extended = np.tile(gray, 2)
+        x_ext = np.arange(0, 720, 10)
 
-            spline = UnivariateSpline(x2, testGray_extended, s=s_val)
-            smoothed_full = spline(x1_full)
-            smoothed = smoothed_full[:18000]
+        spline = UnivariateSpline(x_ext, gray_extended, s=initial_s)
+        smoothed = spline(x_fine)  # We only evaluate the first 360 degrees
 
-            # find peaks
-            height_thresh = smoothed.min() + 0.6 * (smoothed.max() - smoothed.min())
-            peaks, info = find_peaks(smoothed, height=height_thresh)
-            pks = info.get('peak_heights', [])
-            locs = peaks.tolist()
-            ok = 0
-            while ok == 0:
-                if pks is None or len(pks) == 0:
-                    # try shifted
-                    shifted = np.roll(smoothed, 90)
-                    peaks, info = find_peaks(shifted, height=height_thresh)
-                    pks = info.get('peak_heights', [])
-                    if pks is not None or len(pks) > 0:
-                        locs = (peaks - 90).tolist()
-                        toto = locs[0] / 100
-                        locs[0] = toto
-                        ok = 1
-                    else:
-                        pks = [smoothed[0]]
-                        locs = [0]
-                        ok = 1
-                else:
-                    toto = locs[0] / 100
-                    locs[0] = toto
-                    ok = 1
+        # 3. Peak Detection
+        s_min, s_max = smoothed.min(), smoothed.max()
+        height_thresh = s_min + 0.6 * (s_max - s_min)
 
-            # store
-            Amps.append(np.max(pks) - np.min(smoothed))
-            locations.append(locs)
+        peaks, info = find_peaks(smoothed, height=height_thresh)
+        pks = info.get('peak_heights', [])
 
-        maxAmp = 255
-        # check threshold
-        if maxAmp > max_threshold:
-            print('TO HIGH')
-            # increase smoothing and retry
-            s_val += s_increment
+        # Logic for finding the primary location
+        if pks is not None and len(pks) > 0:
+            # Get index of the highest peak
+            best_idx = np.argmax(pks)
+            best_loc = peaks[best_idx] * 0.1  # Convert index to degrees
+            amp_val = pks[best_idx] - s_min
         else:
-            break
+            # Fallback: if no peak found, use the global max
+            best_loc = np.argmax(smoothed) * 0.1
+            amp_val = s_max - s_min
 
-    # Final assignment
-    for amp, locs, grain in zip(Amps, locations, Grainstats):
-        inclination = 0 if amp <= 0 else (amp * 90 / maxAmp)
-        azimuth = (locs[0] - 45) % 180
+        # 4. Final Orientation Assignment
+        # Using your specific formulas
+        inclination = 0 if amp_val <= 0 else (amp_val * 90 / MAX_AMP_FIXED)
+        azimuth = (best_loc - 45) % 180
+
         grain.set_orientation(azimuth, inclination)
 
     return Grainstats
@@ -295,202 +878,496 @@ def check_grains(grains):
     print("✅ All grains passed pixel integrity check.")
 
 
-def Neighbours(Grainstats, B):
-    sizeA = B.shape
-    Y, X = np.meshgrid(np.arange(sizeA[1]), np.arange(sizeA[0]))  # X: cols, Y: rows
-    listePixel = []
-    for i, grain in enumerate(Grainstats):
-        pixel_list = np.array(grain.PixelList)
-        grain_array = np.zeros((pixel_list.shape[0], 3), dtype=int)
-        grain_array[:, 0:2] = pixel_list
-        grain_array[:, 2] = grain.ID  # Grain ID (1-based like MATLAB)
-        listePixel.append(grain_array)
-
-    # Combine all positions
-    AllPosition = np.vstack(listePixel)
-    # Create Zfinal grain map
-    Zfinal = np.zeros(np.flip(sizeA), dtype=int)
-    for row in AllPosition:
-        x, y, grain_id = row
-        Zfinal[x, y] = grain_id
-
-    # Neighbour extraction
-    for i, grain in tqdm(enumerate(Grainstats), total=len(Grainstats), desc="Processing grains"):
-
-        if grain.IsTwin == True or grain.HaveFriends == True:
-            grain.Neighbours = []
-
-            # Create binary mask of the grain
-            Mask = np.zeros(np.flip(sizeA), dtype=np.uint8)
-            pixel_list = np.array(grain.PixelList)
-            Mask[pixel_list[:, 0], pixel_list[:, 1]] = 1
-
-            GrainIDUnique = set()
-            for m in range(2, 5, 2):  # m = 2, 4, 6, 8, 10
-                selem = disk(m)
-                Mask_dilated = dilation(Mask, selem)
-                Mask_border = (Mask_dilated.astype(int) - Mask.astype(int)).astype(bool)
-                BorderMask = Zfinal * Mask_border
-                new_neighbours = np.unique(BorderMask)
-                GrainIDUnique.update(new_neighbours[new_neighbours != 0])
-
-            # Remove self if present
-            GrainIDUnique.discard(i + 1)
-            grain.set_neighbours(list(GrainIDUnique))
-
-    return Grainstats
+# --- Step 1: Generate Skeleton from Pixel List ---
+def get_skeleton(grain, image_shape):
+    if len(grain.SkeletonCoord) == 0:
+        mask = np.zeros(image_shape, dtype=bool)
+        twin_pixels = np.array(grain.PixelList)
+        mask[twin_pixels[:, 0], twin_pixels[:, 1]] = 1
+        skeleton = skeletonize(mask)
+    else:
+        mask = np.zeros(image_shape, dtype=bool)
+        twin_pixels = np.array(grain.SkeletonCoord)
+        mask[twin_pixels[:, 0], twin_pixels[:, 1]] = 1
+        skeleton = skeletonize(mask)
+    return skeleton
 
 
-def Neighbours2(Grainstats, B):
-    sizeA = B.shape
-    Y, X = np.meshgrid(np.arange(sizeA[1]), np.arange(sizeA[0]))  # X: cols, Y: rows
-    listePixel = []
+# --- Step 2: Extract branches from skeleton ---
+def get_branches(skeleton):
+    skel = Skeleton(skeleton)
+    branches = summarize(skel, separator='_')
+    return skel, branches
 
-    for i, grain in enumerate(Grainstats):
-        pixel_list = np.array(grain.PixelList, dtype=int)  # Ensures integers
-        grain_array = np.zeros((pixel_list.shape[0], 3), dtype=int)
-        grain_array[:, 0:2] = pixel_list
-        grain_array[:, 2] = grain.ID  # Grain ID (1-based like MATLAB)
-        listePixel.append(grain_array)
 
-    # Combine all positions
-    AllPosition = np.vstack(listePixel)
+# --- Step 3: Get branch endpoints ---
+def get_branch_endpoints_centroid(skel, branches, grain):
+    endpoints = []
+    centroid = []
+    for _, row in branches.iterrows():
+        src = row[1]
+        dst = row[2]
+        pt1 = skel.coordinates[int(src)]
+        pt2 = skel.coordinates[int(dst)]
+        endpoints.append((pt1, pt2))
+    centroid_1 = np.transpose(grain.Centroid)
+    centroid_int = centroid_1.astype(np.int64)
 
-    # Create Zfinal grain map
-    Zfinal = np.zeros(np.flip(sizeA), dtype=int)
-    for row in AllPosition:
-        x, y, grain_id = row
-        Zfinal[x, y] = grain_id
+    centroid.append(centroid_int)
 
-    # Neighbour extraction
-    for i, grain in tqdm(enumerate(Grainstats), total=len(Grainstats), desc="Processing grains"):
+    return endpoints, centroid_int
 
+
+# --- Step 4: Get centroids of neighbour grains ---
+def compute_centroids(grain_ids, grains):
+    centroids = {}
+    for gr in grains:
+        if gr.ID in grain_ids:
+            pixels = np.array(gr.PixelList)
+            centroids[gr.ID] = np.mean(pixels, axis=0)
+    return centroids
+
+def check_twins(Grains, list_grains):
+    for grain in Grains:
+
+        if grain.ID in list_grains:
+
+            if grain.IsTwin == True:
+                list_grains.remove(grain.ID)
+
+    return list_grains
+
+def get_optimized_neighbours(Grainstats, image_input):
+    # Detect if image or shape was passed
+    if hasattr(image_input, 'shape'):
+        shape = image_input.shape[:2]
+    else:
+        shape = image_input[:2]
+
+    z_final = np.zeros(shape, dtype=np.int32)
+    rows_max, cols_max = shape[0] - 1, shape[1] - 1
+
+    for grain in Grainstats:
+        pixels = np.asarray(grain.PixelList, dtype=int)
+
+        # Consistent Indexing: pixels[:, 1] is Y (Rows), pixels[:, 0] is X (Cols)
+        # We clip to prevent "Index 509 is out of bounds for size 509"
+        y_idx = np.clip(pixels[:, 1], 0, rows_max)
+        x_idx = np.clip(pixels[:, 0], 0, cols_max)
+
+        z_final[y_idx, x_idx] = grain.ID
+
+    # Adjacency logic (Grid Shifting)
+    h_neighbors = np.stack((z_final[:, :-1], z_final[:, 1:]), axis=-1).reshape(-1, 2)
+    v_neighbors = np.stack((z_final[:-1, :], z_final[1:, :]), axis=-1).reshape(-1, 2)
+
+    all_pairs = np.vstack([h_neighbors, v_neighbors])
+    all_pairs = all_pairs[all_pairs[:, 0] != all_pairs[:, 1]]
+    all_pairs = all_pairs[(all_pairs[:, 0] != 0) & (all_pairs[:, 1] != 0)]
+
+    all_pairs.sort(axis=1)
+    unique_pairs = np.unique(all_pairs, axis=0)
+
+    adj_dict = {grain.ID: set() for grain in Grainstats}
+    for id1, id2 in unique_pairs:
+        if id1 in adj_dict: adj_dict[id1].add(id2)
+        if id2 in adj_dict: adj_dict[id2].add(id1)
+
+    for grain in tqdm(Grainstats, desc="Updating Neighbors"):
         if grain.IsTwin or grain.HaveFriends:
-
+            neighbor_ids = adj_dict.get(grain.ID, set())
+            final_neigh = check_twins(Grainstats, neighbor_ids)
+            grain.set_neighbours(list(final_neigh))
+        else:
             grain.Neighbours = []
-            # Create binary mask of the grain
-            Mask = np.zeros(np.flip(sizeA), dtype=np.uint8)
-            pixel_list = np.array(grain.PixelList, dtype=int)  # Ensures integers
-            Mask[pixel_list[:, 0], pixel_list[:, 1]] = 1
-
-            GrainIDUnique = set()
-            for m in range(2, 5, 2):  # m = 2, 4, 6, 8, 10
-                selem = disk(m)
-                Mask_dilated = dilation(Mask, selem)
-                Mask_border = (Mask_dilated.astype(int) - Mask.astype(int)).astype(bool)
-                BorderMask = Zfinal * Mask_border
-                new_neighbours = np.unique(BorderMask)
-                GrainIDUnique.update(new_neighbours[new_neighbours != 0])
-
-            # Remove self if present
-            GrainIDUnique.discard(i + 1)
-            grain.set_neighbours(list(GrainIDUnique))
 
     return Grainstats
 
+
+def find_parents_separate_twins(grains, image_shape, Zfinal, Average_Size, skeleton_grains, background=None):
+    for i, grain in enumerate(grains):
+
+        if grain.IsTwin:
+
+            skeleton = get_skeleton(grain, image_shape)
+
+            skel, branches = get_branches(skeleton)
+            endpoints, centroido = get_branch_endpoints_centroid(skel, branches, grain)
+            neighbour_ids = grain.Neighbours
+            centroids = compute_centroids(neighbour_ids, grains)
+            centroids2 = copy.deepcopy(centroids)
+            branch_results = []
+
+            neighs_left_ID = []
+            neighs_right_ID = []
+
+            Parents = False
+            neighs_left = []
+            neighs_right = []
+            neighs_left_length = []
+            neighs_right_length = []
+            points = endpoints[0]
+
+            for nid, centroid in centroids.items():
+                if nid == 70:
+                    kk = 1
+                if is_projection_inside_segment(np.array(points[0]), np.array(points[1]), centroid):
+                    length, left = is_left_or_right(np.array(points[0]), np.array(points[1]), centroid)
+                    if left:
+                        neighs_left_length.append(length)
+                        neighs_left_ID.append(nid)
+                        neighs_left.append(find_grain_by_ID(grains, nid))
+
+                    else:
+                        neighs_right_length.append(length)
+                        neighs_right_ID.append(nid)
+                        neighs_right.append(find_grain_by_ID(grains, nid))
+
+                if nid in centroids2:
+                    del centroids2[nid]
+
+            if (len(neighs_left) == 1 and len(neighs_right) == 1):
+                Azimuth_P, Incli_P, Parents = check_friends(neighs_left[0], neighs_right[0])
+                # plot_projection_inside(grain, image_shape, neighs_left[0], neighs_right[0])
+                if Parents == True:
+                    grain.Dad = neighs_left[0].ID
+                    grain.Mum = neighs_right[0].ID
+            elif (len(neighs_left) == 0 and len(neighs_right) == 1) or (
+                    len(neighs_left) == 1 and len(neighs_right) == 0):
+                if len(neighs_right) == 1:
+                    Azimuth_P = neighs_right[0].Azimuth
+                    Incli_P = neighs_right[0].Inclination
+                    grain.Mum = neighs_right[0].ID
+                    Parents = True
+                if len(neighs_left) == 1:
+                    Azimuth_P = neighs_left[0].Azimuth
+                    Incli_P = neighs_left[0].Inclination
+                    grain.Dad = neighs_left[0].ID
+                    Parents = True
+
+            elif (len(neighs_left) == len(neighs_right)) and (len(neighs_right) > 1):
+                # elif (len(neighs_left) == len(neighs_right)) or (len(neighs_right) > 1):
+                neighs_left = [val for _, val in sorted(zip(neighs_left_length, neighs_left))]
+                neighs_right = [val for _, val in sorted(zip(neighs_right_length, neighs_right))]
+                neighs_left_length = [val for _, val in sorted(zip(neighs_left_length, neighs_left_length))]
+                neighs_right_length = [val for _, val in sorted(zip(neighs_right_length, neighs_right_length))]
+
+                Azimuth_P, Incli_P, Parents = check_friends(neighs_left[0], neighs_right[0])
+                if Parents == True:
+                    the_goat, new_granulo = separate_twin(grain, neighs_left[0], neighs_right[0], image_shape,
+                                                          find_max_ID(grains), skeleton_grains)
+                    if new_granulo:
+                        for gr in new_granulo:
+                            # skeleton = get_skeleton(gr, image_shape)
+                            # skel, branches = get_branches(skeleton)
+                            # gr.SkeletonCoord = Skeleton(skeleton).path_coordinates(0)
+                            grains.append(gr)
+                    # skeleton = get_skeleton(the_goat, image_shape)
+                    # the_goat.SkeletonCoord = Skeleton(skeleton).path_coordinates(0)
+                    grains[i] = the_goat
+
+
+
+            else:
+                totot = 3
+
+    return grains
+
+
+def measure_contour_length(contour):
+    length = 0
+
+    for i in range(1, len(contour)):
+        x1 = int(contour[i - 1, 0])
+        y1 = int(contour[i - 1, 1])
+
+        x2 = int(contour[i, 0])
+        y2 = int(contour[i, 1])
+
+        distance = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+
+        length = length + distance
+
+    x1 = int(contour[0, 0])
+    y1 = int(contour[0, 1])
+
+    x2 = int(contour[len(contour) - 1, 0])
+    y2 = int(contour[len(contour) - 1, 1])
+
+    distance = np.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
+
+    return length
+
+
+def gray_mean_twin(grain_stats, folder, brightness, contrast, plot=False, correction_method=False):
+    files = sorted(glob.glob(os.path.join(folder, '*.png')), key=extract_number2)
+    num_grains = len(grain_stats)
+    num_images = len(files)
+
+    gray_mean_array = np.zeros((num_grains, num_images))
+    grain_positions = np.zeros((num_grains, 2))
+    count = np.zeros(num_grains)
+    images = []
+
+    # --- Preprocess all images ---
+    for m in range(num_images):
+        image = cv2.imread(files[m], cv2.IMREAD_GRAYSCALE)
+
+        # APPLY BRIGHTNESS & CONTRAST
+        img_bc = adjust_brightness_contrast(
+            image,
+            brightness_pct=brightness,
+            contrast_pct=contrast
+        )
+        if correction_method == True:
+            img_clahe = apply_clahe(img_bc)
+            img_contrast = adjust_contrast(img_clahe)
+            img_normalize1 = normalize_images_all(img_contrast)
+            img_normalize = np.transpose(img_normalize1[0])
+        # img_normalize = img_bc
+
+        else:
+            img_normalize = img_bc
+
+        images.append(img_normalize)
+
+    images_final = images
+    # --- Initialize variable for manual points ---
+    manual_pts = None
+
+    # --- Main loop over images ---
+    for img_idx in range(num_images):
+        image = images_final[img_idx]
+
+        if plot:
+            fig, ax = plt.subplots()
+            ax.imshow(image, cmap='gray')
+            ax.set_title(f"Image {img_idx} - {os.path.basename(files[img_idx])}")
+            ax.axis('off')
+
+        for i, grain in enumerate(grain_stats):
+            if grain.IsTwin:
+                # --- Special case for grain ID == 132 ---
+
+                if grain.ID == 55555:
+                    # Let user select points only once (on first image)
+                    if img_idx == 3 and manual_pts is None:
+                        print("Select SkeletonCoord points for grain ID 132.")
+                        print("Left-click to select points, right-click or press Enter when done.")
+
+                        # Interactive point selection (temporary)
+                        plt.figure()
+                        plt.imshow(image, cmap='gray')
+                        plt.title("Click to select points for Grain ID 132 (not saved)")
+                        manual_pts = plt.ginput(n=-1, timeout=0)
+                        plt.close()
+
+                        if manual_pts:
+                            manual_pts = np.array(manual_pts)
+                            print(f"Selected {len(manual_pts)} manual points for grain 132.")
+                        else:
+                            print("No manual points selected — using existing SkeletonCoord.")
+                            manual_pts = np.array(grain.SkeletonCoord)
+
+                    # Use manual points if available, otherwise default to SkeletonCoord
+                    if manual_pts is not None and len(manual_pts) > 0:
+                        pixels = manual_pts
+                    else:
+                        pixels = np.array(grain.SkeletonCoord)
+
+                # else:
+                pixels = np.array(grain.SkeletonCoord)
+
+                # Compute gray mean
+                y = pixels[:, 1].astype(int)
+                x = pixels[:, 0].astype(int)
+                gray_values = image[y, x]
+                gray_mean_array[i, img_idx] = np.mean(gray_values)
+                grain_positions[i] = [np.mean(x), np.mean(y)]
+
+                if plot:
+                    color = 'lime' if grain.ID == 132 else 'red'
+                    ax.scatter(x, y, s=2, color=color)
+
+            else:
+                pixels = np.array(grain.PixelList)
+                y = pixels[:, 1].astype(int)
+                x = pixels[:, 0].astype(int)
+                gray_values = image[y, x]
+                gray_mean_array[i, img_idx] = np.mean(gray_values)
+                grain_positions[i] = [np.mean(x), np.mean(y)]
+
+        if plot:
+            plt.show()
+
+    # --- Update Grainstats with new data ---
+    for i, grain in enumerate(grain_stats):
+        grain.Position = grain_positions[i]
+        grain.GrayMean = gray_mean_array[i]
+        count[i] = np.sum(grain.GrayMean < 10)
+
+    result = np.mean(gray_mean_array, axis=0)
+    return grain_stats, result
+
+def adjust_brightness_contrast(image, brightness_pct, contrast_pct):
+    """
+    Adjusts brightness and contrast of a grayscale image by percentages.
+
+    Parameters:
+    - image: Input grayscale image (numpy array)
+    - brightness_pct: Percentage to increase/decrease brightness (-100 to 100)
+    - contrast_pct: Percentage to increase/decrease contrast (-100 to 100)
+
+    Returns:
+    - Adjusted image (uint8)
+    """
+    # Convert percentages to alpha and beta
+    alpha = 1 + (contrast_pct / 100.0)  # Contrast factor
+    beta = (brightness_pct / 100.0) * 255  # Brightness offset
+
+    # Apply adjustment
+    adjusted = cv2.convertScaleAbs(image, alpha=alpha, beta=beta)
+    return adjusted
 
 # %% MAIN FUNCTION
 def orientation_and_classification(orientation_path, grains_image_path, twins_image_path, image_name):
+
+    #Initialisation
+    print("Grains Process Starting...")
+
+    Grains = []
     path_gr = grains_image_path
     path_tw = twins_image_path
     img_study = image_name
     grains = cv2.imread(grains_image_path, cv2.COLOR_BGR2GRAY)
     nothing, size = Grain_functions.image_size(grains_image_path)
     twins = cv2.imread(twins_image_path, cv2.COLOR_BGR2GRAY)
-    skeleton_grains = np.uint8(skeletonize(np.uint8(~grains)))
 
-    skeleton_twins = np.uint8(skeletonize(np.uint8(~twins)))
+    skeleton_grains = skeletonize_binary(~grains)
+    skeleton_twins = skeletonize_binary(~twins)
 
-    kernel = np.ones((5, 5), np.uint8)
-    dilated_image = cv2.dilate(skeleton_twins, kernel, iterations=1)
+    # ======================================================
+    # 2. Extract twin grains
+    # ======================================================
 
-    bool_ske = ~dilated_image.astype(bool)
-    bool_ske_tw = bool_ske
-    labeled_array_ske, num_features_ske = label(~bool_ske, return_num=True)
-    print(np.shape(bool_ske))
-    print(np.shape(labeled_array_ske))
-    contours = find_contours(labeled_array_ske, 0.5)
-    contour_twins = np.zeros_like(grains, dtype=np.uint8)
-    combined_image = np.zeros_like(grains, dtype=np.uint8)
-    skeleton_grains[skeleton_grains == 1] = 255
-    contour_points_list = []
+    kernel_5 = np.ones((5, 5), np.uint8)
+    dilated_twins = cv2.dilate(skeleton_twins, kernel_5, iterations=1)
+
+    labels_twins = label(dilated_twins.astype(bool))
+    twin_contours = find_contours(labels_twins, 0.5)
+
     Twins = []
-    for contour in contours:
-        contour = np.round(contour).astype(int)
-        contour = np.flip(contour)
-        cv2.fillPoly(skeleton_grains, [contour], 0)  # Fill the interior of the contour with 0
-        cv2.drawContours(skeleton_grains, [contour], -1, (255), thickness=1)  # Draw the contour lines
-        contour_points = []
-        contour = np.flip(contour)
-        for point in contour:
-            y, x = point
+    twin_contours_int = []
 
-            corrected_x = max(0, round(x))
-            corrected_y = max(0, round(y))
-            contour_points.append((corrected_x, corrected_y))
-            contour_twins[round(y), round(x)] = 255
-        contour_points_list.append(contour_points)
-    for i, contour in enumerate(contour_points_list):
-        contour2 = np.array(contour, np.int32)
-        points_inside = Grain_functions.get_integer_points_inside_contour(contour2)
-        points = np.array(points_inside, dtype=np.int32)
-        contour_array = np.array(contour, dtype=np.int32)
-        center_x = np.mean(points[:, 0])
-        center_y = np.mean(points[:, 1])
-        gr = Grain_functions.Grain(points, contour_array, (center_x, center_y), len(points[:, 0]), 1, i + 1)
+    for i, contour in enumerate(twin_contours):
+        contour = np.round(contour).astype(int)
+        contour = np.flip(contour, axis=1)
+
+        twin_contours_int.append(contour)
+
+        points_inside = Grain_functions.get_integer_points_inside_contour(contour)
+        points = np.asarray(points_inside, dtype=np.int32)
+
+        if len(points) == 0:
+            continue
+
+        center = points.mean(axis=0)
+
+        gr = Grain_functions.Grain(
+            points,
+            contour,
+            tuple(center),
+            len(points),
+            1,
+            i + 1
+        )
+
         gr.is_twinning(True)
         Twins.append(gr)
 
-    combined_image[combined_image == 0] = skeleton_grains[combined_image == 0]
+    # ======================================================
+    # 3. Remove twins from grain skeleton
+    # ======================================================
 
-    skeleton_grains = np.uint8(skeletonize(np.uint8(combined_image)))
-    skeleton = np.pad(skeleton_grains, pad_width=1, mode='constant', constant_values=1)
-    kernel = np.ones((3, 3), np.uint8)
-    dilated_image = cv2.dilate(skeleton, kernel, iterations=1)
+    skeleton_grains = subtract_contours_from_skeleton(
+        skeleton_grains,
+        twin_contours_int
+    )
 
-    bool_ske = ~dilated_image.astype(bool)
-    bool_ske_gr = bool_ske
-    labeled_array_ske, num_features_ske = label(bool_ske, return_num=True)
-    contours = []
-    contours = find_contours(labeled_array_ske, 0.5)
-    contour_twins = np.zeros_like(grains, dtype=np.uint8)
-    # Create a combined image initialized with zeros
-    combined_image = np.zeros_like(grains, dtype=np.uint8)
-    skeleton_grains[skeleton_grains == 1] = 255
-    contour_points_list = []
-    for contour in contours:
-        contour = np.round(contour).astype(int)
-        contour_points = []
+    skeleton_grains = skeletonize_binary(skeleton_grains)
 
-        for point in contour:
-            y, x = point
-            corrected_x = max(0, math.floor(x) - 1)
-            corrected_y = max(0, math.floor(y) - 1)
-            contour_points.append((corrected_x, corrected_y))
+    # ======================================================
+    # 4. Extract grains
+    # ======================================================
 
-            # contour_image[math.floor(y)-1, math.floor(x)-1] = 255
-        contour_points_list.append(contour_points)
-    for i, contour in enumerate(contour_points_list):
-        contour2 = np.array(contour, np.int32)
-        points_inside = Grain_functions.get_integer_points_inside_contour(contour2)
-        points = np.array(points_inside, dtype=np.int32)
-        contour_array = np.array(contour, dtype=np.int32)
-        center_x = np.mean(points[:, 0])
-        center_y = np.mean(points[:, 1])
-        gr = Grain_functions.Grain(points, contour_array, (center_x, center_y), len(points[:, 0]), 1, i + 1)
-        Grains.append(gr)
+    Grains = extract_grains_from_skeleton(
+        skeleton=skeleton_grains,
+        pad=1,
+        dilation_kernel=(3, 3),
+        contour_shift=(1, 1),
+        start_id=1,
+        mark_twinning=False
+    )
+
+    # ======================================================
+    # 5. Spatially indexed grain–twin intersection
+    # ======================================================
+
+    # Build shapely geometries
+    twin_polys = [poly_line(tw) for tw in Twins]
+    grain_polys = [poly_line(gr) for gr in Grains]
+
+    # Build spatial index
+    twin_tree = STRtree(twin_polys)
+
+    for gr, grain_poly in zip(Grains, grain_polys):
+
+        grain_area = grain_poly.area
+        if grain_area == 0:
+            continue
+
+        # 1. Query returns indices of twin_polys whose bounding boxes overlap grain_poly
+        candidate_indices = twin_tree.query(grain_poly)
+
+        for idx in candidate_indices:
+            # 2. Get the twin object and the geometry using the index
+            twin_obj = Twins[idx]
+            t_poly_geom = twin_polys[idx]
+
+            twin_area = t_poly_geom.area
+            if twin_area == 0:
+                continue
+
+            # 3. Precise geometric check
+            if not grain_poly.intersects(t_poly_geom):
+                continue
+
+            intersection = grain_poly.intersection(t_poly_geom)
+            if intersection.is_empty:
+                continue
+
+            overlap_area = intersection.area
+            twinning_ratio = overlap_area / grain_area
+
+            gr.add_twinning_area1(twinning_ratio)
+
+            # Note: Usually in EBSD/microscopy, exact 1.0 matches are rare
+            # due to pixelation, so you might consider a threshold like > 0.95
+            if twinning_ratio >= 0.99:
+                gr.is_twinning(True)
+
     final_orientation = orientation_path
     check_grains(Grains)
 
     Grains2, result = gray_mean(Grains, final_orientation)
 
-    Grains3 = Peaks(Grains2)
+    Grains3 = Peaks_Optimized(Grains2)
     # plot_grains_contour(Grains3, grains.shape)
     check_peaks(Grains3)
     grano = grains
     Grains4 = copy.deepcopy(Grains3)
 
-    Grains4 = Neighbours(Grains4, grano)
+    Grains4 = get_optimized_neighbours(Grains4, grano.shape)
 
     check_grains(Grains4)
 
@@ -539,7 +1416,7 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
                             studied_grain.add_friends(studied_grain2.ID)
 
     Grains5 = copy.deepcopy(Grains4)
-    Grains5 = Neighbours(Grains5, grano)
+    Grains5 = get_optimized_neighbours(Grains5,  grano.shape)
 
     check_grains(Grains5)
     Grains6 = copy.deepcopy(Grains5)
@@ -547,7 +1424,7 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
     check_grains(Grains6)
     Grains6, result = gray_mean(Grains6, final_orientation)
 
-    Grains6 = Peaks(Grains6)
+    Grains6 = Peaks_Optimized(Grains6)
 
     check_grains(Grains6)
     check_peaks(Grains6)
@@ -569,12 +1446,12 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
     Grains6 = new_grains
     for i, gr in enumerate(Grains6):
         if gr.AtRisk == True:
-            print(i)
+
             # gr.PixelList = np.flip(gr.PixelList, axis=1)
             gr.ContourPoints = np.flip(gr.ContourPoints, axis=1)
 
     Grains7 = copy.deepcopy(Grains6)
-    Grains7 = Neighbours2(Grains7, grano)
+    Grains7 = get_optimized_neighbours(Grains7, grano.shape)
 
     check_grains(Grains7)
 
@@ -626,7 +1503,6 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
                 try:
                     new_mask[x, y] = 1
                 except IndexError as e:
-                    # print("toto")
                     continue  # Skip this pixel and continue with the next one
             # Update the grain_matrix with the new grain ID
             grain_matrix2[zero_mask == 1] = new_id
@@ -699,7 +1575,7 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
     min_size = 10
     Grains8 = [gr for gr in Grains8 if len(gr.PixelList) > min_size]
 
-    Grains9 = Neighbours2(Grains8, grano)
+    Grains9 = get_optimized_neighbours(Grains8, grano.shape)
 
     Grains10 = copy.deepcopy(Grains9)
 
@@ -723,12 +1599,12 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
 
     Grains10 = decompose_twins_grains(Grains10, grano, Average_length, Std_length)
 
-    Grains10 = Neighbours3(Grains10, grano)
+    Grains10 = get_optimized_neighbours(Grains10, grano.shape)
 
     Grains11 = copy.deepcopy(Grains10)
 
-    Grains11, result = gray_mean_twin(Grains11, final_orientation)
-    Grains11 = Peaks(Grains11)
+    Grains11, result = gray_mean_twin(Grains11, final_orientation, 0, 0)
+    Grains11 = Peaks_Optimized(Grains11)
     Grains11 = [gr for gr in Grains11 if gr.size > min_size]
     Zfinal = np.zeros(np.flip(grano.shape), dtype=int)
 
@@ -736,85 +1612,67 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
         pixel_list = np.array(gr.PixelList)
         Zfinal[pixel_list[:, 0], pixel_list[:, 1]] = gr.ID
 
-    Grains11 = find_parents_separate_twins(Grains11, np.flip(grano.shape), Zfinal, Average_Size, background=grano)
+    Grains11 = find_parents_separate_twins(Grains11, np.flip(grano.shape), Zfinal, Average_Size, skeleton_grains, background=grano)
     Grains11 = decompose_twins_grains_2(Grains11, grano, Average_length, Std_length)
 
-    Grains11, result = gray_mean_twin(Grains11, final_orientation)
-    Grains11 = Peaks(Grains11)
+    Grains11, result = gray_mean_twin(Grains11, final_orientation, 0, 0)
+    Grains11 = Peaks_Optimized(Grains11)
+    for gr in Grains11:
+        if gr.IsTwin:
+            gr, type_error = grain_twin_analysis(gr, Grains11, np.flip(grano.shape), Zfinal, Average_Size,
+                                                 background=grano)
 
-    final_image = np.ones((height,width,3), dtype=np.uint8)*255
-    twin_contour_image_black = np.ones((height, width, 3), dtype=np.uint8) * 255
-    twin_contour_image_red = np.ones((height, width, 3), dtype=np.uint8) * 255
-    twin_contour_image_blue = np.ones((height, width, 3), dtype=np.uint8) * 255
-    twin_contour_image_green = np.ones((height, width, 3), dtype=np.uint8) * 255
-    twin_contour_image_orange = np.ones((height, width, 3), dtype=np.uint8) * 255
+    for gr in Grains11:
+        if gr.IsTwin:
+            if gr.TwinType == "Tension" or gr.TwinType == "Compression":
+                if gr.Mum:
+                    index = find_grain_by_ID_index(Grains11, gr.Mum)
+                    Grains11[index].IsParents = True
+                if gr.Dad:
+                    index = find_grain_by_ID_index(Grains11, gr.Dad)
+                    Grains11[index].IsParents = True
+
+    final_image = np.ones((height, width, 3), dtype=np.uint8) * 255
 
     for grain in Grains11:
-        grain.ContourLength = measure_contour_length(grain.DilatedContourPoints)
+        # 1. Determine color and thickness based on twin status
+        if grain.IsTwin:
+            if grain.TwinType == "Tension":
+                color = (50, 205, 50)  # Green
+                thickness = 2
+            elif grain.TwinType == "Compression":
+                color = (255, 0, 0)  # Blue (Note: OpenCV is BGR, so 255,0,0 is BLUE)
+                thickness = 2
+            else:
+                color = (0, 0, 255)  # Red (0,0,255 is RED in BGR)
+                thickness = 2
+        else:
+            color = (0, 0, 0)  # Black for normal grains
+            thickness = 1
 
-
+        # 2. Draw directly onto the final image
         try:
             cv2.drawContours(
-                twin_contour_image_black,
-                [grain.DilatedContourPoints],  # Must be a list of arrays
-                contourIdx=-1,
-                color=(0, 0, 0),  # Red in BGR (OpenCV)
-                thickness=1
+                final_image,
+                [grain.DilatedContourPoints],
+                -1,
+                color,
+                thickness
             )
         except Exception as e:
-            print(f"Failed drawing contour for Grain ID {grain.ID}: {e}")
+            print(f"Drawing error for Grain {grain.ID}: {e}")
 
-        if grain.IsTwin:
+    # Apply final transformations
+    final_image = np.flipud(np.rot90(final_image))
+    colormap_path = r'D:\PLM_ML_Twins_Classification\files\Colormap\four_w.png'
+    mode = 3
+    ColorMap = Grain_Orientation.grain_orientation(Grains11, mode, dilated_contours, colormap_path)
 
-            if grain.TwinType == "Tension":
-                try:
-                    cv2.drawContours(
-                        twin_contour_image_green,
-                        [grain.DilatedContourPoints],  # Must be a list of arrays
-                        contourIdx=-1,
-                        color=(50, 205, 50),  # Red in BGR (OpenCV)
-                        thickness=2
-                    )
-                except Exception as e:
-                    print(f"Failed drawing contour for Grain ID {grain.ID}: {e}")
-            if grain.TwinType == "Compression":
-                try:
-                    cv2.drawContours(
-                        twin_contour_image_blue,
-                        [grain.DilatedContourPoints],  # Must be a list of arrays
-                        contourIdx=-1,
-                        color=(0, 0, 255),  # Red in BGR (OpenCV)
-                        thickness=2
-                    )
-                except Exception as e:
-                    print(f"Failed drawing contour for Grain ID {grain.ID}: {e}")
+    FinalPlot = ColorMap.copy()
 
-            if grain.TwinType == "None":
-                try:
-                    cv2.drawContours(
-                        twin_contour_image_red,
-                        [grain.DilatedContourPoints],  # Must be a list of arrays
-                        contourIdx=-1,
-                        color=(255, 0, 0),  # Red in BGR (OpenCV)
-                        thickness=2
-                    )
-                except Exception as e:
-                    print(f"Failed drawing contour for Grain ID {grain.ID}: {e}")
+    # 3. Apply final transformations
+    FinalPlot_rotated = cv2.rotate(FinalPlot, cv2.ROTATE_90_CLOCKWISE)
+    FinalPlot_transformed = cv2.flip(FinalPlot_rotated, 1)
+    FinalPlot_rgb = cv2.cvtColor(FinalPlot_transformed, cv2.COLOR_BGR2RGB)
 
-    is_red = color_mask(twin_contour_image_red, np.array([255, 0, 0]))
-    is_blue = color_mask(twin_contour_image_blue, np.array([0, 0, 255]))
-    is_green = color_mask(twin_contour_image_green, np.array([50, 205, 50]))
-    is_black = color_mask(twin_contour_image_black, np.array([0, 0, 0]))
-
-    # Remove black pixels where red pixels exist
-    is_black = np.logical_and(is_black, ~is_red)
-    is_black = np.logical_and(is_black, ~is_blue)
-    is_black = np.logical_and(is_black, ~is_green)
-
-    # Now apply on final image
-    final_image[is_black] = [0, 0, 0]
-    final_image[is_red] = [255, 0, 0]
-    final_image[is_green] = [50, 205, 50]
-    final_image[is_blue] = [0, 0, 255]
-
-    return final_image
+    return final_image, FinalPlot_rgb

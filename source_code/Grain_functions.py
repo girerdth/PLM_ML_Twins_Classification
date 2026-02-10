@@ -17,6 +17,11 @@ import cv2
 from skimage.morphology import skeletonize
 from skimage.measure import regionprops, label, find_contours
 import math
+from scipy.spatial import cKDTree
+from scipy.spatial.distance import euclidean
+from collections import defaultdict
+from joblib import Parallel, delayed
+
 
 def get_integer_points_inside_contour(contour):
     x_min = np.min(contour[:, 0])
@@ -223,7 +228,6 @@ def cleaning_grains(Grains,size):
                     try:
                         new_mask[x, y] = 1
                     except IndexError as e:
-                        print("toto")
                         continue  # Skip this pixel and continue with the next one
                 kernel_dilate = np.ones((3, 3), np.uint8)
                 dilated_mask  = cv2.dilate(new_mask, kernel_dilate, iterations=1)
@@ -565,11 +569,9 @@ def find_angle(row1, row2):
     return np.degrees(np.arccos(dot_product))
 
 def safe_summarize_skeleton(skeleton_img):
-    # Check if skeleton has any nonzero pixels
     if not np.any(skeleton_img):
         print("⚠ Skeleton is empty, skipping.")
         return None
-
     try:
         return summarize(Skeleton(skeleton_img), separator='_')
     except ValueError as e:
@@ -593,215 +595,191 @@ def find_grain_by_ID_index(grains, ID):
         
     return None
 
+
 def decompose_twins(skeleton, l1, std):
-    
-    pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
+    # Early check for empty or invalid skeleton
+    if skeleton is None or np.sum(skeleton) == 0:
+        print("Skeleton is empty or invalid, returning None.")
+        return None, None
+
+    try:
+        pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
+    except Exception as e:
+        print(f"Error in skeleton_to_csgraph: {e}")
+        return None, None
+
     branch_data = safe_summarize_skeleton(skeleton)
+    if branch_data is None:
+        print("Branch data is None after summarization, returning None.")
+        return None, None
+
     no_change_count = 0
     THEFINALE = 0
 
-    if branch_data is not None:
-        while THEFINALE == 0:
-            final_coordinates = []
-            # Case where twin is not flat because it's 2 twins
-            for index, row in branch_data.iterrows():
-                if row["branch_distance"] > row["euclidean_distance"]*1.25:
+    while THEFINALE == 0:
+        final_coordinates = []
 
-                    ok = 0
-                    skel_obj = Skeleton(skeleton)
-                    branch_coords = skel_obj.path_coordinates(index)  # index of the current branch
-    
-                    # Create empty skeleton of the same shape
-                    skeleton1 = np.zeros_like(skeleton, dtype=bool)
-                    
-                    # Fill only the pixels of this branch
-                    for x, y in branch_coords:
-                        skeleton1[int(x), int(y)] = True
-                   
-                    row_f = row
-                    poto = 0
-                    coordinates = copy.deepcopy(coordinates2)
-                    ratio_d = 1.1
-                    tututu = 0
-                    while ok == 0:
-                         
-                         branch_coords = coordinates
-                         arr = np.column_stack(branch_coords)
-                         if len(arr) == int(row_f["node_id_dst"]):
-                             endpoint = arr[int(row_f["node_id_dst"])-1,:]
-                         else:
-                             endpoint = arr[int(row_f["node_id_dst"]),:]
-                             
-                         x, y = endpoint
-                         skeleton1[x, y] = 0 
-                         new_pixel_graph, coordinates = skeleton_to_csgraph(skeleton1)
-                         new_branch_data = summarize(Skeleton(skeleton1), separator='_')
-                         tututu = tututu + 1
-                         for ind, row2 in new_branch_data.iterrows():
-                             row_f = row2
-                             if row2["branch_distance"] <= row2["euclidean_distance"]*ratio_d:
-                                 branch_coords = coordinates
-                                 arr = np.column_stack(branch_coords)
-                                 endpoint = arr[int(row_f["node_id_dst"]),:]
-                                 x, y = endpoint
-                                 skeleton1[x, y] = 0 
-                                 true_indices = np.argwhere(skeleton1)
-                                 ok = 1
-                                
-                                     
-                    
-                    arr1 = np.column_stack(coordinates2)
-                    arr2 = np.column_stack(coordinates)
-                    # Find rows in A that are NOT in B
-                    mask = np.isin(arr1.view([('', arr1.dtype)]*arr1.shape[1]),
-                                   arr2.view([('', arr2.dtype)]*arr2.shape[1]),
-                                   invert=True).ravel()
-                    
-                    arr3 = arr1[mask]
-                    skeleton2_int = skeleton.astype(int) - skeleton1.astype(int)
-                    skeleton2 = skeleton2_int != 0  # or np.array(C, dtype=bool)
-                    
-                    pixel_graph1, coordinates1 = skeleton_to_csgraph(skeleton1)
-                    branch_data1 = safe_summarize_skeleton(skeleton1)
-                    branch_coords = coordinates1
-                    arr = np.column_stack(branch_coords)
-                    if branch_data1 is not None:
-                        for ind_v2, row_v2 in branch_data1.iterrows():
-                            endpoint = arr[int(row_v2["node_id_dst"]),:]
-                        x, y = endpoint
-                        skeleton1[x, y] = 0   
-                        
-                        pixel_graph1, coordinates1 = skeleton_to_csgraph(skeleton1)
-                        branch_data1 = safe_summarize_skeleton(skeleton1)
-                    
-                    pixel_graph2, coordinates2 = skeleton_to_csgraph(skeleton2)
-                    branch_data2 = summarize(Skeleton(skeleton2), separator='_') 
-                    
-                    twin_mask = np.zeros(skeleton.shape, dtype=np.uint8)
-                    twin_mask = twin_mask + skeleton1.astype(int) + skeleton2.astype(int)
-                    
-                    skeleton = skeletonize(twin_mask > 0)
-                    pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
-                    branch_data = summarize(Skeleton(skeleton), separator='_') 
-                    
-            #Case where there are multiple twins that form junctions
-            if (branch_data["branch_type"] == 1).any(): 
-                
-                ok = 1
+        # Case: Twin is not flat (2 twins)
+        if "branch_distance" in branch_data.columns and "euclidean_distance" in branch_data.columns:
+            twin_mask = branch_data["branch_distance"] > branch_data["euclidean_distance"] * 1.25
+            if twin_mask.any():
+                # Parallelize the processing of each twin branch
+                def process_twin_branch(index, row, skeleton, coordinates2):
+                    try:
+                        skel_obj = Skeleton(skeleton)
+                        branch_coords = skel_obj.path_coordinates(index)
+                        skeleton1 = np.zeros_like(skeleton, dtype=bool)
+                        skeleton1[tuple(zip(*branch_coords))] = True
+
+                        ok = 0
+                        ratio_d = 1.1
+                        while not ok:
+                            branch_coords = coordinates2
+                            arr = np.column_stack(branch_coords)
+                            endpoint = arr[int(row["node_id_dst"]), :]
+                            skeleton1[tuple(endpoint)] = 0
+
+                            new_pixel_graph, coordinates = skeleton_to_csgraph(skeleton1)
+                            new_branch_data = summarize(Skeleton(skeleton1), separator='_')
+
+                            if new_branch_data is not None:
+                                for _, row2 in new_branch_data.iterrows():
+                                    if row2["branch_distance"] <= row2["euclidean_distance"] * ratio_d:
+                                        branch_coords = coordinates
+                                        arr = np.column_stack(branch_coords)
+                                        endpoint = arr[int(row2["node_id_dst"]), :]
+                                        skeleton1[tuple(endpoint)] = 0
+                                        ok = 1
+                                        break
+
+                        arr1 = np.column_stack(coordinates2)
+                        arr2 = np.column_stack(coordinates)
+                        mask = np.isin(arr1.view([('', arr1.dtype)] * arr1.shape[1]),
+                                       arr2.view([('', arr2.dtype)] * arr2.shape[1]),
+                                       invert=True).ravel()
+                        arr3 = arr1[mask]
+
+                        skeleton2 = skeleton & ~skeleton1
+                        twin_mask = skeleton1 | skeleton2
+                        skeleton_updated = skeletonize(twin_mask)
+
+                        return skeleton_updated
+                    except Exception as e:
+                        print(f"Error in process_twin_branch: {e}")
+                        return None
+
+                twin_indices = np.where(twin_mask)[0]
+                updated_skeletons = Parallel(n_jobs=-1)(
+                    delayed(process_twin_branch)(index, branch_data.iloc[index], skeleton, coordinates2)
+                    for index in twin_indices
+                )
+
+                # Combine results from parallel processing
+                valid_skeletons = [skel for skel in updated_skeletons if skel is not None]
+                if not valid_skeletons:
+                    print("No valid skeletons after twin processing.")
+                    return None, None
+
+                skeleton = valid_skeletons[0]  # or combine as needed
+                pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
+                branch_data = summarize(Skeleton(skeleton), separator='_')
+
+        # Case: Multiple twins forming junctions
+        if "branch_type" in branch_data.columns:
+            if (branch_data["branch_type"] == 1).any():
                 branch_data2 = branch_data[branch_data["branch_type"].isin([1, 2])].copy()
                 branch_datas = []
-                
-                while ok == 1:
-                    
+                ok = 1
+
+                while ok and len(branch_data2) > 0:
                     branch_data3 = copy.deepcopy(branch_data2)
-                    matrix_angles = np.zeros((len(branch_data2),len(branch_data2)))+180
-    
+                    matrix_angles = np.ones((len(branch_data2), len(branch_data2))) * 180
+
+                    # Vectorize the computation of angles
                     for idx1 in range(len(branch_data2)):
                         row1 = branch_data2.iloc[idx1]
                         for idx2 in range(idx1 + 1, len(branch_data2)):
                             row2 = branch_data2.iloc[idx2]
-                            if int(row2["branch_type"]) == 1:
+                            if row2["branch_type"] == 1:
                                 common_pt = find_pt(row1, row2)
                                 if common_pt is not None:
-                                    angle = find_angle(row1, row2)
-                                    matrix_angles[idx1, idx2] = angle
-                                    
-                                    
-                    min_index = np.unravel_index(np.argmin(matrix_angles), matrix_angles.shape) 
-                    row_pos, col_pos = min_index
-                    # Map matrix positions to actual DataFrame indices
-                    keep_indices = [branch_data2.index[row_pos], branch_data2.index[col_pos]]
-                    
-                    # Update branch_data3 to keep only these rows
+                                    matrix_angles[idx1, idx2] = find_angle(row1, row2)
+
+                    min_index = np.unravel_index(np.argmin(matrix_angles), matrix_angles.shape)
+                    keep_indices = [branch_data2.index[min_index[0]], branch_data2.index[min_index[1]]]
+
                     branch_data3 = branch_data2.loc[keep_indices].copy()
-                    
-                    # Update branch_data2 to remove these rows
                     branch_data2 = branch_data2.drop(keep_indices)
                     branch_datas.append(branch_data3)
-                    
-                    if len(branch_data2) == 1:
-                        branch_datas.append(branch_data2) 
+
+                    if len(branch_data2) <= 1:
+                        branch_datas.append(branch_data2)
                         ok = 0
-                        
-                    if len(branch_data2) == 0:
-                        ok = 0 
-                
-                for elements in branch_datas:
-                    positions_f = []
-                    
-                    for ind, rowi in elements.iterrows():
-                        
-                        for ij, ro in branch_data.iterrows():
-                            
-                            if rowi["image_coord_src_0"] == ro["image_coord_src_0"] and rowi["image_coord_src_1"] == ro["image_coord_src_1"] and rowi["image_coord_dst_0"] == ro["image_coord_dst_0"] and rowi["image_coord_dst_1"] == ro["image_coord_dst_1"]:
-                                
-                                positions_f.append(Skeleton(skeleton).path_coordinates(ij))
-                                
-                    final_coordinates.append(np.vstack(positions_f))    
-                 
-                skeleton_int = skeleton.astype(int)
-                for coords in final_coordinates:
-                    for r, c in coords:
-                        skeleton_int[int(r), int(c)] = 0
-                
-                cleaned_coordinates = [arr.copy() for arr in final_coordinates] 
-                
-                for i in range(len(cleaned_coordinates)):
-                    for j in range(i + 1, len(cleaned_coordinates)):
-                        arr1 = cleaned_coordinates[i]
-                        arr2 = cleaned_coordinates[j]
-                
-                        # Convert to structured array for fast row comparison
-                        arr1_view = arr1.view([('', arr1.dtype)] * arr1.shape[1])
-                        arr2_view = arr2.view([('', arr2.dtype)] * arr2.shape[1])
-                
-                        # Find common rows
-                        common_mask_1 = np.isin(arr1_view, arr2_view)
-                        common_mask_2 = np.isin(arr2_view, arr1_view)
-                
-                        # Remove common rows
-                        cleaned_coordinates[i] = arr1[~common_mask_1.ravel()]
-                        cleaned_coordinates[j] = arr2[~common_mask_2.ravel()]
-                        
-                        # Step 2: Build one final binary matrix
-                final_matrix = np.zeros(skeleton.shape, dtype=np.uint8)
-                
-                for coords in cleaned_coordinates:
-                    for r, c in coords:
-                        final_matrix[int(r), int(c)] = 1
-                        #Creation new twins
-                final_matrix = skeleton_int + final_matrix        
-                skeleton = skeletonize(final_matrix > 0)
-                pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
-                branch_data = summarize(Skeleton(skeleton), separator='_')       
-                    
-            condition1 = (branch_data["branch_distance"] > branch_data["euclidean_distance"]*1.25).any()
-            condition2 = branch_data["branch_type"].isin([1, 2]).any()
-                    
+
+                # Update skeleton
+                try:
+                    skeleton_int = skeleton.astype(int)
+                    for elements in branch_datas:
+                        coords_list = []
+                        for _, ro in branch_data.iterrows():
+                            for _, rowi in elements.iterrows():
+                                if (rowi["image_coord_src_0"] == ro["image_coord_src_0"] and
+                                    rowi["image_coord_src_1"] == ro["image_coord_src_1"] and
+                                    rowi["image_coord_dst_0"] == ro["image_coord_dst_0"] and
+                                    rowi["image_coord_dst_1"] == ro["image_coord_dst_1"]):
+                                    try:
+                                        coords = Skeleton(skeleton).path_coordinates(_)
+                                        coords_list.append(coords)
+                                    except Exception as e:
+                                        print(f"Error in path_coordinates: {e}")
+                        if coords_list:
+                            coords_array = np.vstack(coords_list)
+                            skeleton_int[tuple(zip(*coords_array))] = 0
+                except Exception as e:
+                    print(f"Error in updating skeleton_int: {e}")
+                    return None, None
+
+                try:
+                    skeleton = skeletonize(skeleton_int)
+                    pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
+                    branch_data = safe_summarize_skeleton(skeleton)
+                except Exception as e:
+                    print(f"Error in skeletonize or skeleton_to_csgraph: {e}")
+                    return None, None
+
+                if branch_data is None:
+                    print("Branch data is None after updating skeleton, returning None.")
+                    return None, None
+
+        # Termination conditions
+        if branch_data is not None:
+            try:
+                condition1 = (branch_data["branch_distance"] > branch_data["euclidean_distance"] * 1.25).any()
+                condition2 = branch_data["branch_type"].isin([1, 2]).any()
+            except Exception as e:
+                print(f"Error in checking termination conditions: {e}")
+                return None, None
+
             if not (condition1 or condition2):
-                for m in range(len(branch_data)):
-                    print(m)
-                    final_matrix = np.zeros(skeleton.shape, dtype=np.uint8)
-                    coord =  Skeleton(skeleton).path_coordinates(m)
-                    for r, c in coord:
-                        final_matrix[int(r), int(c)] = 1
-                        
-                    #plt.imshow(final_matrix)
-                    #plt.show()
-                   
                 THEFINALE = 1
-        
+
             if condition1:
                 no_change_count += 1
-                if no_change_count > 10:  # or some max iteration
-                    print("⚠ No branches satisfying conditions, stopping early.")
+                if no_change_count > 10:
+                    print("No branches satisfying conditions, stopping early.")
                     break
-            
-    else:
-        skeleton = None
-        branch_data = None    
-           
+        else:
+            print("Branch data is None, terminating.")
+            return None, None
+
     return skeleton, branch_data
+
+def get_vector_angle(v1, v2):
+    """Helper to find angle between two vectors."""
+    unit_v1 = v1 / np.linalg.norm(v1)
+    unit_v2 = v2 / np.linalg.norm(v2)
+    dot_product = np.dot(unit_v1, unit_v2)
+    return np.degrees(np.arccos(np.clip(dot_product, -1.0, 1.0)))
 
 def decompose_twins_2(skeleton, l1, std):
     
@@ -847,7 +825,7 @@ def decompose_twins_2(skeleton, l1, std):
                              x, y = endpoint
                              skeleton1[x, y] = 0 
                              new_pixel_graph, coordinates = skeleton_to_csgraph(skeleton1)
-                             new_branch_data = summarize(Skeleton(skeleton1), separator='_')
+                             new_branch_data = safe_summarize_skeleton(Skeleton(skeleton1))
                              tututu = tututu + 1
                              for ind, row2 in new_branch_data.iterrows():
                                  row_f = row2
@@ -992,7 +970,6 @@ def decompose_twins_2(skeleton, l1, std):
                         
                 if not (condition1 or condition2):
                     for m in range(len(branch_data)):
-                        print(m)
                         final_matrix = np.zeros(skeleton.shape, dtype=np.uint8)
                         coord =  Skeleton(skeleton).path_coordinates(m)
                         for r, c in coord:
@@ -1023,9 +1000,7 @@ def decompose_twins_grains(Grains, image, l1, std):
         twin_mask = np.zeros(np.flip(image.shape), dtype=np.uint8)
         
         if grain.IsTwin:
-            if grain.ID == 13:
-                pttt = 1
-                
+
             # Create mask from PixelList
         
             for (x, y) in grain.PixelList:
@@ -1033,8 +1008,7 @@ def decompose_twins_grains(Grains, image, l1, std):
                     twin_mask[x, y] = 1
                 except IndexError:
                     continue
-            if grain.ID == 129:
-                titit = 1
+
                 
            
             skeleton = skeletonize(twin_mask > 0)
@@ -1143,8 +1117,7 @@ def decompose_twins_grains_2(Grains, image, l1, std):
         twin_mask = np.zeros(np.flip(image.shape), dtype=np.uint8)
         
         if grain.IsTwin:
-            if grain.ID == 13:
-                pttt = 1
+
                 
             # Create mask from PixelList
         
@@ -1153,8 +1126,7 @@ def decompose_twins_grains_2(Grains, image, l1, std):
                     twin_mask[x, y] = 1
                 except IndexError:
                     continue
-            if grain.ID == 37:
-                titit = 1
+
                 
            
             skeleton = skeletonize(twin_mask > 0)
@@ -1264,43 +1236,32 @@ def decompose_twins_grains_2(Grains, image, l1, std):
                 elif (len(grain.SkeletonCoord) == 0) and len(true_indices[0]) == 1:
                     grain.SkeletonCoord = true_indices
                 
-    return Grains    
+    return Grains
+
 
 def find_overlapping_grains(grains):
-    overlapping_grains = []
-    n = len(grains)
-    ID_grains = []
+    pixel_to_grains = defaultdict(list)
 
-    for i in range(n):
+    # Map every pixel to the IDs of grains touching it
+    for idx, grain in enumerate(grains):
+        for pixel in grain.PixelList:
+            pixel_to_grains[tuple(pixel)].append(idx)
 
-            
-        grainIPixels = []
-        grainIPixels = set(map(tuple, grains[i].PixelList))
-        for j in range(n):
-            if j != i:
-                if grains[i].ID == 108 and grains[j].ID == 135:
-                    
-                    x_coords = [pixel[0] for pixel in grains[i].PixelList]
-                    y_coords = [pixel[1] for pixel in grains[i].PixelList]
-                    x_coords1 = [pixel[0] for pixel in grains[j].PixelList]
-                    y_coords1 = [pixel[1] for pixel in grains[j].PixelList]                    
-                    # Plot the pixels
-                    '''
-                    plt.scatter(x_coords, y_coords, s=1) 
-                    plt.scatter(x_coords1, y_coords1, s=1, c= 'red')# s=1 sets the size of the markers to 1
+    # Find pixels where more than one grain exists
+    overlaps = defaultdict(int)
+    for pixel, grain_ids in pixel_to_grains.items():
+        if len(grain_ids) > 1:
+            # For every pair of grains at this pixel, increment overlap count
+            from itertools import combinations
+            for i, j in combinations(sorted(grain_ids), 2):
+                overlaps[(i, j)] += 1
 
-                    plt.xlabel('X Coordinate')
-                    plt.ylabel('Y Coordinate')
-                    plt.grid(True)
-                    plt.show()
-                    '''
-                    pt = 1
-                grainJPixels = set(map(tuple, grains[j].PixelList))
-                if len(grainIPixels.intersection(grainJPixels)) != 0 :
-                    toto = grainIPixels.intersection(grainJPixels)
-                    overlapping_grains.append((grains[i], grains[j]))
-                    ID_grains.append((i,j,len(grainIPixels.intersection(grainJPixels))))
+    # Format output to match your original structure
+    ID_grains = [(i, j, count) for (i, j), count in overlaps.items()]
+    overlapping_grains = [(grains[i], grains[j]) for (i, j, count) in ID_grains]
+
     return overlapping_grains, ID_grains
+
 
 def remove_overlapping_pixels_ATRISK(grain1, grain2, size):
     width, height = size

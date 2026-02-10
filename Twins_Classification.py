@@ -23,6 +23,17 @@ class App:
         # GUI Elements
         self.create_widgets()
 
+        # Frame for image displays
+        self.image_frame = tk.Frame(self.root)
+        self.image_frame.pack(pady=10)
+
+        # Labels for images
+        self.image_label = tk.Label(self.image_frame)
+        self.image_label.pack(side=tk.LEFT, padx=10)
+
+        self.plm_label = tk.Label(self.image_frame)
+        self.plm_label.pack(side=tk.LEFT, padx=10)
+
     def create_widgets(self):
         # Frame for buttons
         button_frame = tk.Frame(self.root)
@@ -32,7 +43,7 @@ class App:
         tk.Button(button_frame, text="Select Image", command=self.select_image).pack(side=tk.LEFT, padx=5)
         tk.Button(button_frame, text="Create Pseudocolour", command=self.create_pseudoimage).pack(side=tk.LEFT, padx=5)
         tk.Button(button_frame, text="Simple Segmentation", command=self.run_simplify).pack(side=tk.LEFT, padx=5)
-        tk.Button(button_frame, text="Advanced Segmentation", command=self.run_amplify).pack(side=tk.LEFT, padx=5)
+        tk.Button(button_frame, text="Twins Classification", command=self.run_amplify).pack(side=tk.LEFT, padx=5)
 
         # Image display
         self.image_label = tk.Label(self.root)
@@ -62,8 +73,8 @@ class App:
 
     def run_amplify(self):
         if self.image_path is not None:
-            result = amplify(self.image_path, self.original_image)
-            self.display_image_segmentation(result,self.image_path)
+            result, plm_map = amplify(self.image_path, self.original_image)
+            self.display_image_segment_plm_map(result,plm_map, self.image_path)
         else:
             messagebox.showerror("Error", "No image selected or created.")
 
@@ -75,26 +86,74 @@ class App:
         self.image_label.config(image=img_tk)
         self.image_label.image = img_tk  # Keep a reference
 
-    def display_image_segmentation(self, img, img_path):
+    def display_image_segmentation(self, img_contour, img_path):
+        # 1. Load the pseudocolour background (the EBSD/orientation map)
         pseudocolour = cv2.imread(img_path)
         pseudocolour = cv2.cvtColor(pseudocolour, cv2.COLOR_BGR2RGB)
 
-        img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+        # 2. Ensure the contour image is RGB
+        # Assuming img_contour is the black/red/green/blue image you created earlier
+        if len(img_contour.shape) == 2:  # If grayscale
+            img_rgb = cv2.cvtColor(img_contour, cv2.COLOR_GRAY2RGB)
+        else:
+            img_rgb = cv2.cvtColor(img_contour, cv2.COLOR_BGR2RGB)
 
-        # Create mask for white pixels (all channels == 255)
-        white_mask = np.all(img_rgb == 255, axis=2)
+        # 3. Masking: We want to keep the CONTOURS (not white)
+        # and show the PSEUDOCOLOUR where the image is WHITE.
+        white_mask = np.all(img_rgb == [255, 255, 255], axis=-1)
 
-        # Initialize output
-        toto = img_rgb.copy()
+        # 4. Combine: Start with the contour image, then fill the background
+        combined = img_rgb.copy()
+        combined[white_mask] = pseudocolour[white_mask]
 
-        # Replace pixels where img_rgb is white
-        toto[white_mask] = pseudocolour[white_mask]
-
-        img_pil = Image.fromarray(toto)
+        # 5. Convert to Tkinter format
+        img_pil = Image.fromarray(combined)
         img_tk = ImageTk.PhotoImage(image=img_pil)
 
         self.image_label.config(image=img_tk)
+        self.image_label.image = img_tk
+
+
+    def display_image_segment_plm_map(self, img_contour, plm_map, img_path):
+        # 1. Load the pseudocolour background (the EBSD/orientation map)
+        pseudocolour = cv2.imread(img_path)
+        pseudocolour = cv2.cvtColor(pseudocolour, cv2.COLOR_BGR2RGB)
+
+        # 2. Ensure the contour image is RGB
+        if len(img_contour.shape) == 2:  # If grayscale
+            img_rgb = cv2.cvtColor(img_contour, cv2.COLOR_GRAY2RGB)
+        else:
+            img_rgb = cv2.cvtColor(img_contour, cv2.COLOR_BGR2RGB)
+
+        # 3. Masking: We want to keep the CONTOURS (not white)
+        white_mask = np.all(img_rgb == [255, 255, 255], axis=-1)
+
+        # 4. Combine: Start with the contour image, then fill the background
+        combined = img_rgb.copy()
+        combined[white_mask] = pseudocolour[white_mask]
+
+        # 5. Convert to Tkinter format for contour image
+
+        img_pil = Image.fromarray(combined)
+        img_tk = ImageTk.PhotoImage(image=img_pil)
+
+        # 6. Convert PLM map to Tkinter format
+        plm_rgb = cv2.cvtColor(plm_map, cv2.COLOR_BGR2RGB)
+        # 3. Masking: We want to keep the CONTOURS (not white)
+
+        combined2 = img_rgb.copy()
+        combined2[white_mask] = plm_rgb[white_mask]
+        plm_pil = Image.fromarray(combined2)
+        plm_tk = ImageTk.PhotoImage(image=plm_pil)
+
+        # 7. Update the labels
+        self.image_label.config(image=img_tk)
         self.image_label.image = img_tk  # Keep a reference
+
+        self.plm_label.config(image=plm_tk)
+        self.plm_label.image = plm_tk  # Keep a reference
+
+
 
 if __name__ == "__main__":
     root = tk.Tk()
