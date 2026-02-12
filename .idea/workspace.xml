@@ -4,10 +4,9 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="9757056f-5c03-4aaf-9093-dc1d952781b2" name="Changes" comment="Test 2">
+    <list default="true" id="9757056f-5c03-4aaf-9093-dc1d952781b2" name="Changes" comment="Code with improved functions">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Twins_Classification.py" beforeDir="false" afterPath="$PROJECT_DIR$/Twins_Classification.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/source_code/Dataset_Generator.py" beforeDir="false" afterPath="$PROJECT_DIR$/source_code/Dataset_Generator.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/source_code/Grain_functions.py" beforeDir="false" afterPath="$PROJECT_DIR$/source_code/Grain_functions.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/source_code/amplify_methods.py" beforeDir="false" afterPath="$PROJECT_DIR$/source_code/amplify_methods.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/source_code/run_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/source_code/run_models.py" afterDir="false" />
@@ -92,7 +91,8 @@
       <workItem from="1769510647140" duration="52337000" />
       <workItem from="1769772166294" duration="27916000" />
       <workItem from="1770199285706" duration="36613000" />
-      <workItem from="1770375887010" duration="14463000" />
+      <workItem from="1770375887010" duration="37398000" />
+      <workItem from="1770901080258" duration="5933000" />
     </task>
     <task id="LOCAL-00001" summary="Test">
       <option name="closed" value="true" />
@@ -118,7 +118,15 @@
       <option name="project" value="LOCAL" />
       <updated>1770041204291</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="Code with improved functions">
+      <option name="closed" value="true" />
+      <created>1770721694413</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1770721694413</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -127,18 +135,8 @@
   <component name="VcsManagerConfiguration">
     <MESSAGE value="Test" />
     <MESSAGE value="Test 2" />
-    <option name="LAST_COMMIT_MESSAGE" value="Test 2" />
-  </component>
-  <component name="XDebuggerManager">
-    <breakpoint-manager>
-      <breakpoints>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/source_code/Grain_functions.py</url>
-          <line>1422</line>
-          <option name="timeStamp" value="10" />
-        </line-breakpoint>
-      </breakpoints>
-    </breakpoint-manager>
+    <MESSAGE value="Code with improved functions" />
+    <option name="LAST_COMMIT_MESSAGE" value="Code with improved functions" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/PLM_ML_Twins_Classification$Twins_Classification.coverage" NAME="Twins_Classification Coverage Results" MODIFIED="1769608081621" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />

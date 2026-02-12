@@ -1,12 +1,10 @@
 # -*- coding: utf-8 -*-
 """
 Created on Wed Mar 12 15:38:52 2025
-
 @author: Thomas Girerd
 """
 # %% Python packages
 
-# %% Python packages
 import numpy as np
 import os
 import cv2
@@ -39,52 +37,20 @@ from source_code.amplify_methods import select_orientation_folder, pseudo_imgs_g
 
 # %% Functions
 
-# Define a function to extract the numerical part of the file name
 def extract_number(file_name):
+    """
+    Function to extract the numerical part of the file name.
+
+    Args:
+        file_name (str): The full path or name of the file.
+
+    Returns:
+        int: Number in the file
+    """
     match = re.search(r'(\d+)_Input', file_name)
     if match:
         return int(match.group(1))
     return float('inf')  # Return infinity if no number is found
-
-def extract_colour(twins_red):
-    twins_red = cv2.cvtColor(twins_red, cv2.COLOR_BGR2RGB)
-    twins_red[twins_red < 255] = 0
-
-    black = [0, 0, 0]
-    white = [255, 255, 255]
-    red = [255, 0, 0]
-    blue = [0, 0, 255]
-
-    twins_red[np.all(twins_red == black, axis=-1)] = white
-
-    twins_red = cv2.cvtColor(twins_red, cv2.COLOR_RGB2GRAY)
-
-    return twins_red
-
-def poly_line(gr):
-    pts = gr.ContourPoints
-
-    # 1) Build the raw geometry
-    if len(pts) >= 3:
-        geom = Polygon(pts)
-    elif len(pts) == 2:
-        geom = LineString(pts)
-    elif len(pts) == 1:
-        geom = Point(pts[0])
-    else:
-        # no points → return an empty geometry
-        return Point()
-
-        # 2) Try to make it valid
-    try:
-        # preferred in Shapely 2.x
-        geom = make_valid(geom)
-    except (ImportError, AttributeError, ShapelyError):
-        # fallback for older Shapely versions or any failure
-        if not geom.is_valid:
-            geom = geom.buffer(0)
-
-    return geom
 
 def get_file_name_without_extension(file_path):
     """
@@ -152,7 +118,18 @@ def delete_directory(directory):
         print(f"Directory does not exist: {directory}")
 
 
-def predict_twins_fast(images, model_twins):
+def predict_twins(images, model_twins):
+    """
+    Predicts grains and twins using YOLO models in parallel, saving results in separate directories.
+
+    Args:
+        images (list of numpy.ndarray): Input images.
+        model_twins (YOLO): YOLO model for twins.
+
+    Returns:
+        tuple: (numpy.ndarray, list of numpy.ndarray) : Mask of twins, list of twins contours.
+    """
+
     h, w = images[0].shape[:2]
     # We start with a blank canvas
     final_twins_mask = np.zeros((h, w), dtype=np.uint8)
@@ -180,7 +157,7 @@ def predict_twins_fast(images, model_twins):
                 if r.masks.xy is not None:
                     all_twins_contours.append(r.masks.xy[i])
 
-    # Your logic: twins are black (0), background is white (255)
+    # Logic: twins are black (0), background is white (255)
     # So we flip the mask
     final_twins = cv2.bitwise_not(final_twins_mask)
 
@@ -344,6 +321,8 @@ def process_grains(grains_dir, image_path, SizeIm):
     Grain_functions.handle_overlapping_grains(overlapping_grains, SizeIm)
 
     # Generate grain matrix and mask
+    # Remove overlapping of grains and generate a smooth grain map
+
     grain_matrix, mask = Grain_functions.generate_grain_matrix(Seg_Grain, SizeIm)
     grain_matrix2 = Grain_functions.fill_contour_gaps(Seg_Grain, grain_matrix, mask, SizeIm)
     grain_matrix2 = Grain_functions.add_missing_regions(grain_matrix2, Seg_Grain, SizeIm)
@@ -619,7 +598,7 @@ def amplify_method(image_path, original_path):
     with ThreadPoolExecutor() as executor:
         # Submit both prediction tasks to the executor
         grains_future = executor.submit(predict_and_process_grains, pseudo_images[3], m_grains, SizeIm)
-        twins_future = executor.submit(predict_twins_fast, pseudo_images, m_twins)
+        twins_future = executor.submit(predict_twins, pseudo_images, m_twins)
 
         # Retrieve the results
         contour_points_grains, confidences, grain_matrix = grains_future.result()

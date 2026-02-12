@@ -1,3 +1,12 @@
+"""
+Created on Tues Feb 10 2026
+@author: Thomas Girerd
+
+This code generates the GUI for twins classification and grains segmentation.
+
+"""
+
+
 import tkinter as tk
 from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
@@ -87,7 +96,7 @@ class App:
         self.image_label.image = img_tk  # Keep a reference
 
     def display_image_segmentation(self, img_contour, img_path):
-        # 1. Load the pseudocolour background (the EBSD/orientation map)
+        # 1. Load the pseudocolour image
         pseudocolour = cv2.imread(img_path)
         pseudocolour = cv2.cvtColor(pseudocolour, cv2.COLOR_BGR2RGB)
 
@@ -99,7 +108,7 @@ class App:
             img_rgb = cv2.cvtColor(img_contour, cv2.COLOR_BGR2RGB)
 
         # 3. Masking: We want to keep the CONTOURS (not white)
-        # and show the PSEUDOCOLOUR where the image is WHITE.
+        # and show the PSEUDOCOLOUR image where the image is WHITE.
         white_mask = np.all(img_rgb == [255, 255, 255], axis=-1)
 
         # 4. Combine: Start with the contour image, then fill the background

@@ -36,18 +36,15 @@ from scipy.signal import find_peaks
 from scipy.interpolate import UnivariateSpline
 from scipy.spatial import ConvexHull
 
-# External Tools
 from ultralytics import YOLO
 import alphashape
 from tqdm import tqdm
 
 # %% Own scripts
-from source_code.Grain_functions import find_grain_by_ID, find_grain_by_ID_index, merge_grain, decompose_twins_grains, decompose_twins_grains_2
+from source_code.Grain_functions import find_grain_by_ID, find_grain_by_ID_index, decompose_twins_grains, decompose_twins_grains_2
 from source_code import Grain_functions
 from source_code import Grain_Orientation
-# from Test import get_integer_points_inside_contour  # Optional
 from source_code.pseudoimage import apply_clahe, adjust_contrast, normalize_images_all
-
 
 # %% Functions
 
@@ -767,6 +764,17 @@ def extract_number2(file_name):
     return float('inf')
 
 def pseudo_imgs_generator(orientation_path, random_flag):
+    """
+    Generate multiple pseudocolour images using different samples orientation to improve twins detection
+
+    Args:
+    orientation_path (str): Folder where all the images are saved for the different orientation.
+    random_flat (int 0 or 1): Pseudocolour images can either be generated randomly or following the patterns below.
+
+    Returns:
+    pseudo_imgs (list of np.array): 3 images generated combining grayscale images at different orientation.
+    SizeIm (tuples of int): Image size.
+    """
 
     files = sorted(glob.glob(os.path.join(orientation_path, '*.png')), key=extract_number2)
     num_images = len(files)
@@ -804,16 +812,27 @@ def pseudo_imgs_generator(orientation_path, random_flag):
     return pseudo_imgs, SizeIm
 
 
-def Peaks_Optimized(Grainstats, initial_s=50, target_mean=122.5):
+def Peaks_Optimized(Grainstats, initial_s=50, s_increment=50, max_threshold=254, target_mean=122.5):
     """
-    High-speed peak orientation estimation for metallurgical grains.
-    Uses a fixed max_amplitude of 255 for 8-bit orientation scaling.
+    Estimate peak orientations for grains using a smoothing spline.
+    If the maximum amplitude exceeds `max_threshold`, the smoothing parameter `s` is increased by `s_increment`.
+    The loop runs for a maximum of 4 iterations.
+
+    Parameters:
+    - Grainstats: list of objects with attributes GrayMean and method set_orientation(azimuth, inclination)
+    - initial_s: starting smoothing factor for UnivariateSpline
+    - s_increment: how much to increase smoothing factor if threshold exceeded
+    - max_threshold: amplitude threshold to adjust smoothing
+
+    Returns:
+    - Grainstats with orientations set
     """
     MAX_AMP_FIXED = 255
     # x_input: 0, 10, 20... 350 (36 points)
     x_input = np.arange(0, 360, 10)
-    # x_fine: 0.1 degree resolution (3600 points) - 10x faster than 0.01
+    # x_fine: 0.1 degree resolution (3600 points)
     x_fine = np.arange(0, 360, 0.1)
+    max_iter = 4
 
     for grain in Grainstats:
         # 1. Pre-processing & Vectorized Shifting
@@ -831,30 +850,53 @@ def Peaks_Optimized(Grainstats, initial_s=50, target_mean=122.5):
         # Tile twice to handle circularity/wrap-around properly
         gray_extended = np.tile(gray, 2)
         x_ext = np.arange(0, 720, 10)
+        iter = 0
+        ok = 0
+        s_value = initial_s
 
-        spline = UnivariateSpline(x_ext, gray_extended, s=initial_s)
-        smoothed = spline(x_fine)  # We only evaluate the first 360 degrees
+        while ok == 0 and iter <= max_iter:
 
-        # 3. Peak Detection
-        s_min, s_max = smoothed.min(), smoothed.max()
-        height_thresh = s_min + 0.6 * (s_max - s_min)
+            spline = UnivariateSpline(x_ext, gray_extended, s=s_value)
+            smoothed = spline(x_fine)  # We only evaluate the first 360 degrees
 
-        peaks, info = find_peaks(smoothed, height=height_thresh)
-        pks = info.get('peak_heights', [])
+            # 3. Peak Detection
+            s_min, s_max = smoothed.min(), smoothed.max()
+            height_thresh = s_min + 0.6 * (s_max - s_min)
 
-        # Logic for finding the primary location
-        if pks is not None and len(pks) > 0:
-            # Get index of the highest peak
+            peaks, info = find_peaks(smoothed, height=height_thresh)
+            pks = info.get('peak_heights', [])
+
+            # Logic for finding the primary location
+            if pks is not None and len(pks) > 0:
+                # Get index of the highest peak
+                best_idx = np.argmax(pks)
+                best_loc = peaks[best_idx] * 0.1  # Convert index to degrees
+                amp_val = pks[best_idx] - s_min
+                ok = 1
+            else:
+                # Fallback: if no peak found, use the global max
+                shifted = np.roll(smoothed, 90)
+                peaks, info = find_peaks(shifted, height=height_thresh)
+                pks = info.get('peak_heights', [])
+                if pks is not None and len(pks) > 0:
+                    best_idx = np.argmax(pks)
+                    best_loc = peaks[best_idx] * 0.1  # Convert index to degrees
+                    amp_val = pks[best_idx] - s_min
+                    ok = 1
+                else:
+                    s_value = s_value + 50
+                    iter = iter + 1
+
+            # 4. Final Orientation Assignment
+            # Using your specific formulas
+        if iter == max_iter:
+            peaks, info = find_peaks(smoothed)
+            pks = info.get('peak_heights', [])
             best_idx = np.argmax(pks)
             best_loc = peaks[best_idx] * 0.1  # Convert index to degrees
             amp_val = pks[best_idx] - s_min
-        else:
-            # Fallback: if no peak found, use the global max
-            best_loc = np.argmax(smoothed) * 0.1
-            amp_val = s_max - s_min
-
-        # 4. Final Orientation Assignment
-        # Using your specific formulas
+            if amp_val > MAX_AMP_FIXED:
+                amp_val = MAX_AMP_FIXED
         inclination = 0 if amp_val <= 0 else (amp_val * 90 / MAX_AMP_FIXED)
         azimuth = (best_loc - 45) % 180
 
@@ -1147,33 +1189,6 @@ def gray_mean_twin(grain_stats, folder, brightness, contrast, plot=False, correc
 
         for i, grain in enumerate(grain_stats):
             if grain.IsTwin:
-                # --- Special case for grain ID == 132 ---
-
-                if grain.ID == 55555:
-                    # Let user select points only once (on first image)
-                    if img_idx == 3 and manual_pts is None:
-                        print("Select SkeletonCoord points for grain ID 132.")
-                        print("Left-click to select points, right-click or press Enter when done.")
-
-                        # Interactive point selection (temporary)
-                        plt.figure()
-                        plt.imshow(image, cmap='gray')
-                        plt.title("Click to select points for Grain ID 132 (not saved)")
-                        manual_pts = plt.ginput(n=-1, timeout=0)
-                        plt.close()
-
-                        if manual_pts:
-                            manual_pts = np.array(manual_pts)
-                            print(f"Selected {len(manual_pts)} manual points for grain 132.")
-                        else:
-                            print("No manual points selected — using existing SkeletonCoord.")
-                            manual_pts = np.array(grain.SkeletonCoord)
-
-                    # Use manual points if available, otherwise default to SkeletonCoord
-                    if manual_pts is not None and len(manual_pts) > 0:
-                        pixels = manual_pts
-                    else:
-                        pixels = np.array(grain.SkeletonCoord)
 
                 # else:
                 pixels = np.array(grain.SkeletonCoord)
@@ -1359,27 +1374,25 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
     final_orientation = orientation_path
     check_grains(Grains)
 
-    Grains2, result = gray_mean(Grains, final_orientation)
+    Grains, result = gray_mean(Grains, final_orientation)
 
-    Grains3 = Peaks_Optimized(Grains2)
+    Grains = Peaks_Optimized(Grains)
     # plot_grains_contour(Grains3, grains.shape)
-    check_peaks(Grains3)
+    check_peaks(Grains)
     grano = grains
-    Grains4 = copy.deepcopy(Grains3)
+    Grains = get_optimized_neighbours(Grains, grano.shape)
 
-    Grains4 = get_optimized_neighbours(Grains4, grano.shape)
-
-    check_grains(Grains4)
+    check_grains(Grains)
 
     id_twins = []
     Error_Angle = 6
     A = []
-    for gr in Grains4:
+    for gr in Grains:
         if gr.IsTwin == True:
             id_twins.append(gr.ID)
 
             for m in range(len(gr.Neighbours)):
-                studied_grain = Grains4[gr.Neighbours[m] - 1]
+                studied_grain = Grains[gr.Neighbours[m] - 1]
                 phi1 = studied_grain.Azimuth
                 Phi = studied_grain.Inclination
                 id1 = studied_grain.ID
@@ -1390,7 +1403,7 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
                         phi1 = studied_grain.Azimuth
                         Phi = studied_grain.Inclination
                         id1 = studied_grain.ID
-                        studied_grain2 = Grains4[gr.Neighbours[n] - 1]
+                        studied_grain2 = Grains[gr.Neighbours[n] - 1]
                         phi11 = studied_grain2.Azimuth
                         Phi1 = studied_grain2.Inclination
                         id2 = studied_grain2.ID
@@ -1415,21 +1428,14 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
                         if CosTheta <= Error_Angle:
                             studied_grain.add_friends(studied_grain2.ID)
 
-    Grains5 = copy.deepcopy(Grains4)
-    Grains5 = get_optimized_neighbours(Grains5,  grano.shape)
 
-    check_grains(Grains5)
-    Grains6 = copy.deepcopy(Grains5)
+    Grains = get_optimized_neighbours(Grains,  grano.shape)
 
-    check_grains(Grains6)
-    Grains6, result = gray_mean(Grains6, final_orientation)
+    check_grains(Grains)
+    Grains, result = gray_mean(Grains, final_orientation)
 
-    Grains6 = Peaks_Optimized(Grains6)
-
-    check_grains(Grains6)
-    check_peaks(Grains6)
-
-    overlapping_grains, ID_grains = Grain_functions.find_overlapping_grains(Grains6)
+    Grains = Peaks_Optimized(Grains)
+    overlapping_grains, ID_grains = Grain_functions.find_overlapping_grains(Grains)
 
     for i, grains_couple in tqdm(enumerate(overlapping_grains), total=len(overlapping_grains),
                                  desc="Processing grains"):
@@ -1437,7 +1443,7 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
             Grain_functions.remove_overlapping_pixels_ATRISK(grains_couple[0], grains_couple[1], size)
 
     new_grains = []
-    for gr in Grains6:
+    for gr in Grains:
         if gr.AtRisk and (len(gr.ContourPoints) == 0 or len(gr.PixelList) == 0):
             print(f"Removed grain ID {gr.ID} due to empty ContourPoints or PixelList.")
             continue
@@ -1450,24 +1456,19 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
             # gr.PixelList = np.flip(gr.PixelList, axis=1)
             gr.ContourPoints = np.flip(gr.ContourPoints, axis=1)
 
-    Grains7 = copy.deepcopy(Grains6)
-    Grains7 = get_optimized_neighbours(Grains7, grano.shape)
-
-    check_grains(Grains7)
-
-    grain_matrix = np.zeros(np.flip(grano.shape), dtype=np.int32)
+    Grains7 = get_optimized_neighbours(Grains6, grano.shape)
+    grain_matrix2 = np.zeros(np.flip(grano.shape), dtype=np.int32)
     mask = np.zeros(np.flip(grano.shape), dtype=np.uint8)
     for grain in Grains7:
 
         for (x, y) in grain.PixelList:
             try:
-                grain_matrix[x, y] = grain.ID
+                grain_matrix2[x, y] = grain.ID
                 mask[x, y] = 1
             except IndexError as e:
                 print(f"IndexError: Grain ID {grain.ID} caused an out-of-bounds error at position ({x}, {y})")
                 continue
     Grains7 = sorted(Grains7, key=lambda g: g.confidence, reverse=True)
-    grain_matrix2 = copy.deepcopy(grain_matrix)
 
     for grain in Grains7:
         # Create an empty mask for the grain contour
@@ -1530,11 +1531,9 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
     width, height = grano.shape
     # Create twin_contour_image with white background
 
-    Grains8 = copy.deepcopy(Grains7)
-
     kernel = np.ones((3, 3), np.uint8)  # Or larger if you want more dilation
     # plot_grains(Grains7, grains.shape)
-    for grain in Grains8:
+    for grain in Grains7:
         # 1. Create binary mask for this grai
         grain_mask = np.zeros(np.flip(grano.shape), dtype=np.uint8)
         for (x, y) in grain.PixelList:
@@ -1573,12 +1572,10 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
     # Assuming image_shape is the same as your grain mask shape
 
     min_size = 10
-    Grains8 = [gr for gr in Grains8 if len(gr.PixelList) > min_size]
+    Grains7 = [gr for gr in Grains7 if len(gr.PixelList) > min_size]
 
-    Grains9 = get_optimized_neighbours(Grains8, grano.shape)
-
-    Grains10 = copy.deepcopy(Grains9)
-
+    Grains7 = get_optimized_neighbours(Grains7, grano.shape)
+    Grains10 = copy.deepcopy(Grains7)
     Grains10 = delete_small_twins(Grains10)
 
     for gr in Grains10:
@@ -1601,40 +1598,39 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
 
     Grains10 = get_optimized_neighbours(Grains10, grano.shape)
 
-    Grains11 = copy.deepcopy(Grains10)
-
-    Grains11, result = gray_mean_twin(Grains11, final_orientation, 0, 0)
-    Grains11 = Peaks_Optimized(Grains11)
-    Grains11 = [gr for gr in Grains11 if gr.size > min_size]
+    Grains10, result = gray_mean_twin(Grains10, final_orientation, 0, 0)
+    Grains10 = Peaks_Optimized(Grains10)
+    Grains10 = [gr for gr in Grains10 if gr.size > min_size]
     Zfinal = np.zeros(np.flip(grano.shape), dtype=int)
 
-    for gr in Grains11:
+    for gr in Grains10:
         pixel_list = np.array(gr.PixelList)
         Zfinal[pixel_list[:, 0], pixel_list[:, 1]] = gr.ID
 
-    Grains11 = find_parents_separate_twins(Grains11, np.flip(grano.shape), Zfinal, Average_Size, skeleton_grains, background=grano)
-    Grains11 = decompose_twins_grains_2(Grains11, grano, Average_length, Std_length)
+    Grains10 = find_parents_separate_twins(Grains10, np.flip(grano.shape), Zfinal, Average_Size, skeleton_grains, background=grano)
+    Grains10 = decompose_twins_grains_2(Grains10, grano, Average_length, Std_length)
 
-    Grains11, result = gray_mean_twin(Grains11, final_orientation, 0, 0)
-    Grains11 = Peaks_Optimized(Grains11)
-    for gr in Grains11:
+    Grains10, result = gray_mean_twin(Grains10, final_orientation, 0, 0)
+    Grains10 = Peaks_Optimized(Grains10)
+
+    for gr in Grains10:
         if gr.IsTwin:
-            gr, type_error = grain_twin_analysis(gr, Grains11, np.flip(grano.shape), Zfinal, Average_Size,
+            gr, type_error = grain_twin_analysis(gr, Grains10, np.flip(grano.shape), Zfinal, Average_Size,
                                                  background=grano)
 
-    for gr in Grains11:
+    for gr in Grains10:
         if gr.IsTwin:
             if gr.TwinType == "Tension" or gr.TwinType == "Compression":
                 if gr.Mum:
-                    index = find_grain_by_ID_index(Grains11, gr.Mum)
-                    Grains11[index].IsParents = True
+                    index = find_grain_by_ID_index(Grains10, gr.Mum)
+                    Grains10[index].IsParents = True
                 if gr.Dad:
-                    index = find_grain_by_ID_index(Grains11, gr.Dad)
-                    Grains11[index].IsParents = True
+                    index = find_grain_by_ID_index(Grains10, gr.Dad)
+                    Grains10[index].IsParents = True
 
     final_image = np.ones((height, width, 3), dtype=np.uint8) * 255
 
-    for grain in Grains11:
+    for grain in Grains10:
         # 1. Determine color and thickness based on twin status
         if grain.IsTwin:
             if grain.TwinType == "Tension":
@@ -1666,7 +1662,7 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
     final_image = np.flipud(np.rot90(final_image))
     colormap_path = r'D:\PLM_ML_Twins_Classification\files\Colormap\four_w.png'
     mode = 3
-    ColorMap = Grain_Orientation.grain_orientation(Grains11, mode, dilated_contours, colormap_path)
+    ColorMap = Grain_Orientation.grain_orientation(Grains10, mode, dilated_contours, colormap_path)
 
     FinalPlot = ColorMap.copy()
 
@@ -1674,5 +1670,8 @@ def orientation_and_classification(orientation_path, grains_image_path, twins_im
     FinalPlot_rotated = cv2.rotate(FinalPlot, cv2.ROTATE_90_CLOCKWISE)
     FinalPlot_transformed = cv2.flip(FinalPlot_rotated, 1)
     FinalPlot_rgb = cv2.cvtColor(FinalPlot_transformed, cv2.COLOR_BGR2RGB)
+
+    # Convert FinalPlot_rgb back to BGR for OpenCV display
+    FinalPlot_bgr = cv2.cvtColor(FinalPlot_rgb, cv2.COLOR_RGB2BGR)
 
     return final_image, FinalPlot_rgb
