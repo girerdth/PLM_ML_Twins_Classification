@@ -5,11 +5,15 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="9757056f-5c03-4aaf-9093-dc1d952781b2" name="Changes" comment="Code with improved functions">
+      <change afterPath="$PROJECT_DIR$/source_code/boxplot.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/source_code/create_images.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Twins_Classification.py" beforeDir="false" afterPath="$PROJECT_DIR$/Twins_Classification.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/source_code/Grain_functions.py" beforeDir="false" afterPath="$PROJECT_DIR$/source_code/Grain_functions.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/source_code/amplify_methods.py" beforeDir="false" afterPath="$PROJECT_DIR$/source_code/amplify_methods.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/source_code/run_models.py" beforeDir="false" afterPath="$PROJECT_DIR$/source_code/run_models.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/runs/segment/grains/image0.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/runs/segment/grains/labels/image0.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/runs/segment/twins/image0.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/runs/segment/twins/labels/image0.txt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/source_code/pseudoimage.py" beforeDir="false" afterPath="$PROJECT_DIR$/source_code/pseudoimage.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -55,6 +59,8 @@
     &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
     &quot;Python.Dataset_Generator.executor&quot;: &quot;Profiler&quot;,
     &quot;Python.Twins_Classification.executor&quot;: &quot;Profiler&quot;,
+    &quot;Python.boxplot.executor&quot;: &quot;Run&quot;,
+    &quot;Python.create_images.executor&quot;: &quot;Run&quot;,
     &quot;Python.main.executor&quot;: &quot;Run&quot;,
     &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
     &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
@@ -73,10 +79,40 @@
     &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
   }
 }</component>
+  <component name="RunManager">
+    <configuration name="create_images" type="PythonConfigurationType" factoryName="Python" temporary="true" nameIsGenerated="true">
+      <module name="PLM_ML_Twins_Classification" />
+      <option name="ENV_FILES" value="" />
+      <option name="INTERPRETER_OPTIONS" value="" />
+      <option name="PARENT_ENVS" value="true" />
+      <envs>
+        <env name="PYTHONUNBUFFERED" value="1" />
+      </envs>
+      <option name="SDK_HOME" value="" />
+      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$/source_code" />
+      <option name="IS_MODULE_SDK" value="true" />
+      <option name="ADD_CONTENT_ROOTS" value="true" />
+      <option name="ADD_SOURCE_ROOTS" value="true" />
+      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+      <option name="RUN_TOOL" value="" />
+      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/source_code/create_images.py" />
+      <option name="PARAMETERS" value="" />
+      <option name="SHOW_COMMAND_LINE" value="false" />
+      <option name="EMULATE_TERMINAL" value="false" />
+      <option name="MODULE_MODE" value="false" />
+      <option name="REDIRECT_INPUT" value="false" />
+      <option name="INPUT_FILE" value="" />
+      <method v="2" />
+    </configuration>
+    <recent_temporary>
+      <list>
+        <item itemvalue="Python.create_images" />
+      </list>
+    </recent_temporary>
+  </component>
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-PY-253.29346.308" />
         <option value="bundled-python-sdk-ca5e2b39c7df-6e1f45a539f7-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.29346.308" />
       </set>
     </attachedChunks>
@@ -92,7 +128,12 @@
       <workItem from="1769772166294" duration="27916000" />
       <workItem from="1770199285706" duration="36613000" />
       <workItem from="1770375887010" duration="37398000" />
-      <workItem from="1770901080258" duration="5933000" />
+      <workItem from="1770901080258" duration="5986000" />
+      <workItem from="1770979187851" duration="1428000" />
+      <workItem from="1771235543434" duration="6427000" />
+      <workItem from="1771339051390" duration="2476000" />
+      <workItem from="1771429755224" duration="19976000" />
+      <workItem from="1781599538813" duration="11000" />
     </task>
     <task id="LOCAL-00001" summary="Test">
       <option name="closed" value="true" />
@@ -126,7 +167,15 @@
       <option name="project" value="LOCAL" />
       <updated>1770721694413</updated>
     </task>
-    <option name="localTasksCounter" value="5" />
+    <task id="LOCAL-00005" summary="Code with improved functions">
+      <option name="closed" value="true" />
+      <created>1770911896930</created>
+      <option name="number" value="00005" />
+      <option name="presentableId" value="LOCAL-00005" />
+      <option name="project" value="LOCAL" />
+      <updated>1770911896930</updated>
+    </task>
+    <option name="localTasksCounter" value="6" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -140,6 +189,8 @@
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/PLM_ML_Twins_Classification$Twins_Classification.coverage" NAME="Twins_Classification Coverage Results" MODIFIED="1769608081621" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/PLM_ML_Twins_Classification$boxplot.coverage" NAME="boxplot Coverage Results" MODIFIED="1771339909199" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/source_code" />
     <SUITE FILE_PATH="coverage/PLM_ML_Twins_Classification$main.coverage" NAME="main Coverage Results" MODIFIED="1769521604673" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/PLM_ML_Twins_Classification$create_images.coverage" NAME="create_images Coverage Results" MODIFIED="1771577666976" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/source_code" />
   </component>
 </project>
