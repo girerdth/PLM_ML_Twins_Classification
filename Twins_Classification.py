@@ -108,24 +108,16 @@ class App:
         THRESHOLD = 3.90e-1  # µm/px limit for the model
 
         if self.resolution_640 <= THRESHOLD:
-            self.n_crops = 1  # no cropping needed, image is used as a whole
-            print("all good")
             self.res_status.config(
                 text=f"✓ {value:.4f} µm/px  |  {self.resolution_640:.4f} µm/px at 640 px  |  No cropping needed",
                 fg="green"
             )
         else:
-            # Each crop halves the width, halving the µm/px value at 640 px.
-            # Find the smallest n such that resolution_640 / 2^n <= THRESHOLD.
-            n = math.ceil(math.log2(self.resolution_640 / THRESHOLD))
-            self.n_crops = n
-            effective_res = self.resolution_640 / (2 ** n)
             self.res_status.config(
-                text=(f"✓ {value:.4f} µm/px  |  {self.resolution_640:.4f} µm/px at 640 px  |  "
-                      f"⚠ {n} crop(s) needed  →  {effective_res:.4f} µm/px"),
+                text=(f"⚠ {value:.4f} µm/px  |  {self.resolution_640:.4f} µm/px at 640 px  |  "
+                      f"Resolution out of training range — results will be unreliable"),
                 fg="orange"
             )
-            print("all good ou pas")
 
         self._set_processing_buttons(enabled=True)
 

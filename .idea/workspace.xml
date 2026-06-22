@@ -5,15 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="9757056f-5c03-4aaf-9093-dc1d952781b2" name="Changes" comment="Code with improved functions">
-      <change afterPath="$PROJECT_DIR$/source_code/boxplot.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/source_code/create_images.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/Twins_Classification.py" beforeDir="false" afterPath="$PROJECT_DIR$/Twins_Classification.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/runs/segment/grains/image0.jpg" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/runs/segment/grains/labels/image0.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/runs/segment/twins/image0.jpg" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/runs/segment/twins/labels/image0.txt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/source_code/pseudoimage.py" beforeDir="false" afterPath="$PROJECT_DIR$/source_code/pseudoimage.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
