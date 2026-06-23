@@ -58,11 +58,11 @@ The application provides four main buttons:
 ### Example for Twins Classification
 
 1. First step, after clicking on "Create Pseudocolour", 3 greyscale images needs to be selected and then, the name of the pseudocolour image needs to be saved. 
-![files/media/step1.PNG](files/media/step1.PNG)
+![files/media/step1.png](files/media/step1.png)
 2. Resolution in µm/px needs to be entered. The image is resize to 640 pixels and the new resolution is measured to make sure it is below the threshold of the ML model.
-![files/media/step2.PNG](files/media/step2.PNG)
+![files/media/step2.png](files/media/step2.png)
 3. Finally, if "Twins Classification" is selected, the orientation folder where all the greyscale images are stored needs to be selected and the final result will be displayed. 
- ![files/media/step3.PNG](files/media/step3.PNG)
+ ![files/media/step3.png](files/media/step3.png)
 
 ### Project Structure
 ```Code
