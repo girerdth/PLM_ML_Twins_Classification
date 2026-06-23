@@ -2,10 +2,26 @@
 """
 Created on Tuesday Feb 10:33:50 2026
 
-@author: Thomas Girerd
+Author: Thomas Girerd
+
+Description:
+------------
+This script performs grain segmentation and morphological analysis on
+microstructural images. It includes tools for contour extraction,
+grain reconstruction, skeleton analysis, twin decomposition, overlap
+handling, and geometric characterization of grains.
+
+Main libraries:
+- OpenCV for image processing
+- NumPy for numerical operations
+- scikit-image for morphology and connected components
+- skan for skeleton graph analysis
 """
 
-# %% Python packages
+# ============================================================
+# Python Packages
+# ============================================================
+
 from ultralytics import YOLO
 import cv2
 import os
@@ -24,8 +40,28 @@ from skimage.morphology import skeletonize, thin
 from skan.csr import skeleton_to_csgraph
 from skan import Skeleton, summarize
 
-# %% Functions
+# ============================================================
+# Utility Functions
+# ============================================================
+
 def get_integer_points_inside_contour(contour):
+    """
+    Returns all integer coordinate points located inside a contour.
+
+    Parameters
+    ----------
+    contour : ndarray
+        Contour coordinates defining a polygon.
+
+    Returns
+    -------
+    points_inside_contour : list
+        List of (x, y) integer coordinates inside the contour.
+
+    Purpose
+    -------
+    Used to reconstruct all pixels belonging to a segmented grain.
+    """
     x_min = np.min(contour[:, 0])
     x_max = np.max(contour[:, 0])
     y_min = np.min(contour[:, 1])
@@ -41,7 +77,32 @@ def get_integer_points_inside_contour(contour):
     
     return points_inside_contour
 
+
 def generate_grain_matrix(seg_grains, image_size):
+    """
+    Creates an image-sized matrix where each pixel stores grain ID.
+
+    Parameters
+    ----------
+    seg_grains : list
+        List of Grain objects.
+
+    image_size : tuple
+        Size of image (height, width).
+
+    Returns
+    -------
+    grain_matrix : ndarray
+        Matrix containing grain IDs.
+
+    mask : ndarray
+        Binary mask showing occupied grain pixels.
+
+    Purpose
+    -------
+    Converts grain pixel lists into matrix representation for
+    later morphological operations.
+    """
     grain_matrix = np.zeros(image_size, dtype=np.int32)
     mask = np.zeros(image_size, dtype=np.uint8)
     for grain in seg_grains:
@@ -54,6 +115,32 @@ def generate_grain_matrix(seg_grains, image_size):
     return grain_matrix, mask
 
 def fill_contour_gaps(seg_grains, grain_matrix, mask, image_size):
+    """
+    Expands grain contours slightly in order to fill segmentation gaps.
+
+    Parameters
+    ----------
+    seg_grains : list
+        List of grain objects.
+
+    grain_matrix : ndarray
+        Grain ID matrix.
+
+    mask : ndarray
+        Binary mask of occupied pixels.
+
+    image_size : tuple
+        Image dimensions.
+
+    Returns
+    -------
+    grain_matrix2 : ndarray
+        Updated grain matrix with contour gaps filled.
+
+    Purpose
+    -------
+    Fixes small discontinuities along predicted grain boundaries.
+    """
     grain_matrix2 = grain_matrix.copy()
     sorted_grains = sorted(seg_grains, key=lambda g: g.confidence, reverse=True)
 
@@ -68,6 +155,30 @@ def fill_contour_gaps(seg_grains, grain_matrix, mask, image_size):
     return grain_matrix2
 
 def add_missing_regions(grain_matrix2, existing_grains, image_size):
+    """
+    Finds empty image regions and assigns them new grain IDs.
+
+    Parameters
+    ----------
+    grain_matrix2 : ndarray
+        Existing grain matrix.
+
+    existing_grains : list
+        Current grain objects.
+
+    image_size : tuple
+        Image dimensions.
+
+    Returns
+    -------
+    grain_matrix2 : ndarray
+        Updated matrix with missing regions filled.
+
+    Purpose
+    -------
+    Ensures every image pixel belongs to some grain.
+    """
+
     zero_mask = (grain_matrix2 == 0).astype(np.uint8)
     labeled_zeros, _ = label(zero_mask, return_num=True)
     max_id = max(grain.ID for grain in existing_grains)
@@ -86,6 +197,24 @@ def add_missing_regions(grain_matrix2, existing_grains, image_size):
     return grain_matrix2
 
 def create_contour_mask(grain_matrix2):
+    """
+    Creates skeletonized contour map from grain matrix.
+
+    Parameters
+    ----------
+    grain_matrix2 : ndarray
+        Grain ID matrix.
+
+    Returns
+    -------
+    dilated : ndarray
+        Skeletonized contour mask.
+
+    Purpose
+    -------
+    Extracts grain boundaries for topology/skeleton analysis.
+    """
+
     kernel = np.ones((3, 3), np.uint8)
     smoothed_mask = cv2.morphologyEx(grain_matrix2.astype(np.uint8), cv2.MORPH_CLOSE, kernel)
     smoothed_mask = cv2.morphologyEx(smoothed_mask, cv2.MORPH_OPEN, kernel)
@@ -103,6 +232,30 @@ def create_contour_mask(grain_matrix2):
     return dilated
 
 class Grain:
+    """
+    Stores all information related to one segmented grain.
+
+    Attributes
+    ----------
+    PixelList : ndarray
+        Pixel coordinates belonging to grain.
+
+    ContourPoints : ndarray
+        Grain contour coordinates.
+
+    Centroid : tuple
+        Grain center coordinates.
+
+    size : int
+        Number of pixels in grain.
+
+    confidence : float
+        Segmentation confidence score.
+
+    Purpose
+    -------
+    Main object used throughout the analysis pipeline.
+    """
     def __init__(self, pixel_list, contour_points, centroid, size, confidence, ID, is_twin=False, azimuth=None, inclination=None):
         self.PixelList     = pixel_list
         self.ContourPoints = contour_points
@@ -118,9 +271,18 @@ class Grain:
         
         def define_ellipsoid(pixel_list, centroid, scale='sqrt2'):
             """
-            scale: 'sqrt2' -> semi-axes = sqrt(2*lambda)
-                   'sigma1' -> semi-axes = sqrt(lambda)
-            returns: (a, b, tau) with a >= b
+            Computes ellipse approximation from grain pixels.
+
+            Returns
+            -------
+            a : float
+                Major axis length
+
+            b : float
+                Minor axis length
+
+            tau : float
+                Orientation angle
             """
             # central moments
             dx = pixel_list[:, 0] - centroid[0]
@@ -182,9 +344,20 @@ class Grain:
        
     def update_ellipsoid(self, scale='sqrt2'):
         """
-        scale: 'sqrt2' -> semi-axes = sqrt(2*lambda)
-               'sigma1' -> semi-axes = sqrt(lambda)
-        returns: (a, b, tau) with a >= b
+        Recomputes ellipse approximation after grain geometry changes.
+
+        Parameters
+        ----------
+        scale : str
+            Controls ellipse scaling.
+
+            'sqrt2' -> semi-axis = sqrt(2 * eigenvalue)
+            'sigma1' -> semi-axis = sqrt(eigenvalue)
+
+        Purpose
+        -------
+        Called whenever PixelList changes (for example after overlap
+        correction or grain decomposition).
         """
         # central moments
         pixel_list = np.array(self.PixelList)
@@ -226,42 +399,100 @@ class Grain:
         self.twinning_area1 += area
         return self.twinning_area1
 
-    def add_twinning_area2(self, area):
-        self.twinning_area2 += area
-        return self.twinning_area2
-
-    def add_twinning_area3(self, area):
-        self.twinning_area3 += area
-        return self.twinning_area3
-
     def is_twinning(self, is_twin):
+        """
+        Sets whether grain is identified as twin.
+
+        Parameters
+        ----------
+        is_twin : bool
+            Twin classification result.
+        """
         self.IsTwin = is_twin
         return self.IsTwin
 
     def set_orientation(self, azimuth, inclination):
+        """
+        Stores crystallographic orientation values.
+
+        Parameters
+        ----------
+        azimuth : float
+            Grain azimuth angle.
+
+        inclination : float
+            Grain inclination angle.
+        """
         self.Azimuth = azimuth
         self.Inclination = inclination
 
     def set_gray_analysis(self, gray_mean_values, position, threshold=10):
         """
-        Sets grayscale profile and count of images where gray mean is below threshold.
+        Stores grayscale analysis results.
+
+        Parameters
+        ----------
+        gray_mean_values : list
+            Mean grayscale intensity values.
+
+        position : tuple
+            Spatial grain position.
+
+        threshold : int
+            Intensity threshold.
+
+        Purpose
+        -------
+        Counts number of grayscale values below threshold.
+        Used for contrast-based material analysis.
         """
         self.GrayMean = gray_mean_values
         self.Position = position
         self.GrayCount = sum(val < threshold for val in gray_mean_values)
     
     def set_neighbours(self,neigh):
+        """
+        Stores neighboring grains.
+
+        Parameters
+        ----------
+        neigh : list
+            Neighbor grain IDs or objects.
+        """
         self.Neighbours = neigh
 
     def add_friends(self,friends):
+        """
+        Adds related grains to friend list.
+
+        Purpose
+        -------
+        Used when building grain connectivity graph.
+        """
         
         self.HaveFriends = True
         toto = self.Friends
         toto.append(friends)
         self.Friends = toto  
 
+# ============================================================
+# Skeleton / Branch Analysis Utility Functions
+# ============================================================
+
 def find_pt(row1, row2):
-        
+    """
+    Finds common endpoint shared by two skeleton branches.
+
+    Parameters
+    ----------
+    row1, row2 : pandas Series
+        Rows extracted from skeleton branch dataframe.
+
+    Returns
+    -------
+    ndarray or None
+        Shared point if branches intersect.
+    """
     pt11 = np.array([int(row1["image_coord_src_0"]), int(row1["image_coord_src_1"])])
     pt21 = np.array([int(row1["image_coord_dst_0"]), int(row1["image_coord_dst_1"])])
          
@@ -276,6 +507,23 @@ def find_pt(row1, row2):
     return None
 
 def find_angle(row1, row2):
+    """
+    Computes angle between two skeleton branches.
+
+    Parameters
+    ----------
+    row1, row2 : pandas Series
+        Branch descriptions from skeleton dataframe.
+
+    Returns
+    -------
+    angle : float
+        Angle in degrees between branches.
+
+    Purpose
+    -------
+    Used when decomposing junctions into separate twins.
+    """
     pt11 = np.array([int(row1["image_coord_src_0"]), int(row1["image_coord_src_1"])])
     pt21 = np.array([int(row1["image_coord_dst_0"]), int(row1["image_coord_dst_1"])])
     pt12 = np.array([int(row2["image_coord_src_0"]), int(row2["image_coord_src_1"])])
@@ -297,8 +545,22 @@ def find_angle(row1, row2):
     dot_product = np.clip(np.dot(A, B), -1.0, 1.0)
     return np.degrees(np.arccos(dot_product))
 
-
 def safe_summarize_skeleton(skeleton_input):
+    """
+    Safely computes skeleton summary using skan.
+
+    Parameters
+    ----------
+    skeleton_input : ndarray or Skeleton object
+
+    Returns
+    -------
+    dataframe or None
+
+    Purpose
+    -------
+    Prevents crashes when skeleton is too small or invalid.
+    """
     # 1. Handle if it's already a Skeleton object
     if isinstance(skeleton_input, Skeleton):
         if skeleton_input.n_paths == 0:
@@ -327,7 +589,21 @@ def safe_summarize_skeleton(skeleton_input):
         return None
     
 def find_grain_by_ID(grains, ID):
-    
+    """
+    Finds grain object from list using grain ID.
+
+    Parameters
+    ----------
+    grains : list
+        List of Grain objects.
+
+    ID : int
+        Target grain ID.
+
+    Returns
+    -------
+    Grain or None
+    """
     for gr in grains:
         if gr.ID == ID:
             return gr
@@ -335,24 +611,106 @@ def find_grain_by_ID(grains, ID):
     return None
 
 def find_grain_by_ID_index(grains, ID):
-    
+    """
+    Finds index position of grain in list using grain ID.
+
+    Parameters
+    ----------
+    grains : list
+        List of Grain objects.
+
+    ID : int
+        Target grain ID.
+
+    Returns
+    -------
+    int or None
+        Index position in list.
+    """
     for i, gr in enumerate(grains):
         if gr.ID == ID:
             return i
         
     return None
 
+# ============================================================
+# Twin Decomposition Functions
+# ============================================================
 
 def decompose_twins(skeleton, l1, std):
+    """
+    Decomposes a twin skeleton into multiple independent branches.
+
+    Parameters
+    ----------
+    skeleton : ndarray
+        Binary skeleton image representing one twin grain.
+
+    l1 : float
+        Characteristic grain length (currently unused here).
+
+    std : float
+        Standard deviation parameter (currently unused here).
+
+    Returns
+    -------
+    skeleton : ndarray
+        Updated skeleton after decomposition.
+
+    branch_data : pandas.DataFrame
+        Branch information extracted from skeleton.
+
+    Purpose
+    -------
+    This function separates merged twin structures into individual
+    linear twin branches.
+
+    It solves two major problems:
+
+    1. Curved twins
+       → If branch length is much longer than straight-line distance,
+         the branch likely contains multiple twins.
+
+    2. Junction twins
+       → If branches form Y-junctions or intersections, split them
+         according to branch angles.
+
+    Main workflow
+    -------------
+    Skeleton → detect abnormal branches → split branches →
+    resolve junctions → return cleaned branches
+    """
+
+    # --------------------------------------------------------
+    # Convert skeleton to graph representation
+    # --------------------------------------------------------
+
     pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
     branch_data = safe_summarize_skeleton(skeleton)
     no_change_count = 0
     THEFINALE = 0
 
     if branch_data is not None:
+        # ----------------------------------------------------
+        # Iterative decomposition loop
+        # Continue until skeleton is fully decomposed
+        # ----------------------------------------------------
         while THEFINALE == 0:
             final_coordinates = []
-            # Case where twin is not flat because it's 2 twins
+
+            # =================================================
+            # PART 1 — Detect curved branches
+            # =================================================
+            #
+            # If branch length is much longer than Euclidean
+            # distance, the branch is not straight and probably
+            # contains multiple twins merged together.
+            #
+            # Rule:
+            # branch_distance > 1.25 × euclidean_distance
+            #
+            # =================================================
+
             for index, row in branch_data.iterrows():
                 if row["branch_distance"] > row["euclidean_distance"] * 1.25:
 
@@ -368,10 +726,14 @@ def decompose_twins(skeleton, l1, std):
                         skeleton1[int(x), int(y)] = True
 
                     row_f = row
-                    poto = 0
                     coordinates = copy.deepcopy(coordinates2)
                     ratio_d = 1.1
-                    tututu = 0
+
+                    # ----------------------------------------
+                    # Iteratively trim branch endpoints
+                    # until branch becomes straight
+                    # ----------------------------------------
+
                     while ok == 0:
 
                         branch_coords = coordinates
@@ -385,7 +747,7 @@ def decompose_twins(skeleton, l1, std):
                         skeleton1[x, y] = 0
                         new_pixel_graph, coordinates = skeleton_to_csgraph(skeleton1)
                         new_branch_data = summarize(Skeleton(skeleton1), separator='_')
-                        tututu = tututu + 1
+
                         for ind, row2 in new_branch_data.iterrows():
                             row_f = row2
                             if row2["branch_distance"] <= row2["euclidean_distance"] * ratio_d:
@@ -397,6 +759,11 @@ def decompose_twins(skeleton, l1, std):
                                 true_indices = np.argwhere(skeleton1)
                                 ok = 1
 
+                    # =================================================
+                    # Create second skeleton branch
+                    # (remaining branch after split)
+                    # =================================================
+
                     arr1 = np.column_stack(coordinates2)
                     arr2 = np.column_stack(coordinates)
                     # Find rows in A that are NOT in B
@@ -407,6 +774,10 @@ def decompose_twins(skeleton, l1, std):
                     arr3 = arr1[mask]
                     skeleton2_int = skeleton.astype(int) - skeleton1.astype(int)
                     skeleton2 = skeleton2_int != 0  # or np.array(C, dtype=bool)
+
+                    # =================================================
+                    # Clean first branch
+                    # =================================================
 
                     pixel_graph1, coordinates1 = skeleton_to_csgraph(skeleton1)
                     branch_data1 = safe_summarize_skeleton(skeleton1)
@@ -424,6 +795,10 @@ def decompose_twins(skeleton, l1, std):
                     pixel_graph2, coordinates2 = skeleton_to_csgraph(skeleton2)
                     branch_data2 = summarize(Skeleton(skeleton2), separator='_')
 
+                    # =================================================
+                    # Merge split branches back together
+                    # =================================================
+
                     twin_mask = np.zeros(skeleton.shape, dtype=np.uint8)
                     twin_mask = twin_mask + skeleton1.astype(int) + skeleton2.astype(int)
 
@@ -432,6 +807,18 @@ def decompose_twins(skeleton, l1, std):
                     branch_data = summarize(Skeleton(skeleton), separator='_')
 
                     # Case where there are multiple twins that form junctions
+
+            # =================================================
+            # PART 2 — Resolve branch junctions
+            # =================================================
+            #
+            # branch_type == 1 indicates branch intersections
+            #
+            # Goal:
+            # pair connected branches according to smallest angle
+            #
+            # =================================================
+
             if (branch_data["branch_type"] == 1).any():
 
                 ok = 1
@@ -453,6 +840,11 @@ def decompose_twins(skeleton, l1, std):
                                     angle = find_angle(row1, row2)
                                     matrix_angles[idx1, idx2] = angle
 
+                    # ------------------------------------------------
+                    # Select smallest angle pair
+                    # These branches likely belong together
+                    # ------------------------------------------------
+
                     min_index = np.unravel_index(np.argmin(matrix_angles), matrix_angles.shape)
                     row_pos, col_pos = min_index
                     # Map matrix positions to actual DataFrame indices
@@ -472,6 +864,10 @@ def decompose_twins(skeleton, l1, std):
                     if len(branch_data2) == 0:
                         ok = 0
 
+                # =================================================
+                # Extract coordinates for each branch group
+                # =================================================
+
                 for elements in branch_datas:
                     positions_f = []
 
@@ -486,10 +882,18 @@ def decompose_twins(skeleton, l1, std):
 
                     final_coordinates.append(np.vstack(positions_f))
 
+                # =================================================
+                # Remove extracted coordinates from skeleton
+                # =================================================
+
                 skeleton_int = skeleton.astype(int)
                 for coords in final_coordinates:
                     for r, c in coords:
                         skeleton_int[int(r), int(c)] = 0
+
+                # =================================================
+                # Remove overlapping coordinates
+                # =================================================
 
                 cleaned_coordinates = [arr.copy() for arr in final_coordinates]
 
@@ -511,6 +915,10 @@ def decompose_twins(skeleton, l1, std):
                         cleaned_coordinates[j] = arr2[~common_mask_2.ravel()]
 
                         # Step 2: Build one final binary matrix
+                # =================================================
+                # Rebuild final binary skeleton
+                # =================================================
+
                 final_matrix = np.zeros(skeleton.shape, dtype=np.uint8)
 
                 for coords in cleaned_coordinates:
@@ -521,6 +929,10 @@ def decompose_twins(skeleton, l1, std):
                 skeleton = skeletonize(final_matrix > 0)
                 pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
                 branch_data = summarize(Skeleton(skeleton), separator='_')
+
+            # =================================================
+            # Check whether decomposition finished
+            # =================================================
 
             condition1 = (branch_data["branch_distance"] > branch_data["euclidean_distance"] * 1.25).any()
             condition2 = branch_data["branch_type"].isin([1, 2]).any()
@@ -577,10 +989,9 @@ def decompose_twins_2(skeleton, l1, std):
                             skeleton1[int(x), int(y)] = True
                        
                         row_f = row
-                        poto = 0
                         coordinates = copy.deepcopy(coordinates2)
                         ratio_d = 1.1
-                        tututu = 0
+
                         while ok == 0:
                              
                              branch_coords = coordinates
@@ -594,7 +1005,7 @@ def decompose_twins_2(skeleton, l1, std):
                              skeleton1[x, y] = 0 
                              new_pixel_graph, coordinates = skeleton_to_csgraph(skeleton1)
                              new_branch_data = safe_summarize_skeleton(Skeleton(skeleton1))
-                             tututu = tututu + 1
+
                              for ind, row2 in new_branch_data.iterrows():
                                  row_f = row2
                                  if row2["branch_distance"] <= row2["euclidean_distance"]*ratio_d:
