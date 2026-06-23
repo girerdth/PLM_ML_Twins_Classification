@@ -3,6 +3,11 @@
 ## Overview
 A machine learning application for twins classification and grain segmentation using deep learning models, with a user-friendly GUI interface.
 
+## Publication
+
+Please read the publication at https://www.sciencedirect.com/science/article/pii/S2590049826001566 to understand more about the work. 
+
+
 ## Project Overview
 
 This project provides tools for analyzing metallic microstructures, specifically focusing on:
@@ -14,13 +19,12 @@ This project provides tools for analyzing metallic microstructures, specifically
 
 - **Interactive GUI**: User-friendly Tkinter-based interface for image processing
 - **Image Processing Capabilities**:
-  - Load and display EBSD images (PNG, JPG, JPEG formats)
+  - Load and display pseudocolour images (PNG, JPG, JPEG formats)
   - Create pseudocolour images from orientation data
   - Simple grain segmentation using contour detection
   - Advanced twins classification with PLM (Polarized Light Microscopy) mapping
 - **Deep Learning Models**: YOLOv8-based models for accurate segmentation and classification
 - **Real-time Visualization**: Side-by-side display of segmentation results and PLM maps
-- **Scientific Visualization**: Integration with scientific libraries (numpy, scipy, scikit-image)
 
 ## Installation
 To set up the project on your local machine, follow these steps:

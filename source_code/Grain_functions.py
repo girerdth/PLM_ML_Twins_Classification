@@ -1644,6 +1644,32 @@ def find_overlapping_grains(grains):
     return overlapping_grains, ID_grains
 
 def remove_overlapping_pixels_ATRISK(grain1, grain2, size):
+    """
+    Resolve pixel overlap between two grains, preferring the one flagged AtRisk.
+
+    Parameters
+    ----------
+    grain1 : Grain
+        First grain in the overlapping pair.
+    grain2 : Grain
+        Second grain in the overlapping pair.
+    size : tuple of int
+        (width, height) of the image, used to bound and rasterize pixels.
+
+    Returns
+    -------
+    lower_conf_grain : Grain
+        The grain flagged AtRisk, with overlapping pixels removed and its
+        PixelList, ContourPoints, and size updated accordingly. Returns
+        unchanged if neither grain is flagged AtRisk.
+
+    Purpose
+    -------
+    Legacy/alternate overlap-resolution routine that strips shared pixels
+    from whichever grain is marked AtRisk (rather than by confidence score,
+    as in remove_overlapping_pixels), then recomputes that grain's contour
+    from the remaining pixels via erosion and connected-component analysis.
+    """
     width, height = size
 
     # Determine which grain has the lowest confidence
@@ -1720,7 +1746,34 @@ def remove_overlapping_pixels_ATRISK(grain1, grain2, size):
     return lower_conf_grain
 
 def remove_overlapping_pixels(grain1, grain2, size):
- 
+    """
+    Resolve pixel overlap between two grains, preferring the higher-confidence one.
+
+    Parameters
+    ----------
+    grain1 : Grain
+        First grain in the overlapping pair, must have a confidence attribute.
+    grain2 : Grain
+        Second grain in the overlapping pair, must have a confidence attribute.
+    size : tuple of int
+        (width, height) of the image, used to bound and rasterize pixels.
+
+    Returns
+    -------
+    lower_conf_grain : Grain
+        The lower-confidence grain (or, on a confidence tie, the larger one),
+        with overlapping pixels removed and its PixelList, ContourPoints,
+        and size updated accordingly.
+
+    Purpose
+    -------
+    Main overlap-resolution routine used by handle_overlapping_grains.
+    Decides which of the two grains should lose the shared pixels (lower
+    model confidence wins precedence; ties are broken by size), strips the
+    overlap from that grain, and recomputes its contour from the remaining
+    pixels via connected-component analysis, keeping only the smallest
+    region if the remaining pixels split into multiple disconnected blobs.
+    """
     width, height = size
     # Determine which grain has the lowest confidence
     if grain1.confidence < grain2.confidence:
@@ -1732,8 +1785,6 @@ def remove_overlapping_pixels(grain1, grain2, size):
             higher_conf_grain, lower_conf_grain = grain2, grain1
     else:
         lower_conf_grain, higher_conf_grain = grain2, grain1
-            
-        
     
     # Convert PixelLists to sets of tuples for easier manipulation
     lower_pixels_set = set(map(tuple, lower_conf_grain.PixelList))
@@ -1790,28 +1841,94 @@ def remove_overlapping_pixels(grain1, grain2, size):
     for (x, y) in lower_conf_grain.PixelList:
         if 0 <= x < width and 0 <= y < height:
             mask[x, y] = 255
-    
-    # Plot the mask
-    '''
-    plt.imshow(mask, cmap='gray')
-    plt.title('Updated Grain')
-    plt.show()
-    '''
         
     return lower_conf_grain
 
 def handle_overlapping_grains(overlapping_grains,size):
-    
+    """
+    Resolve pixel overlap for every pair of overlapping grains.
+
+    Parameters
+    ----------
+    overlapping_grains : list of tuple of Grain
+        List of (grain_a, grain_b) pairs as returned by find_overlapping_grains.
+    size : tuple of int
+        (width, height) of the image, passed through to remove_overlapping_pixels.
+
+    Returns
+    -------
+    None
+        Grains are updated in place via remove_overlapping_pixels.
+
+    Purpose
+    -------
+    Batch driver that applies remove_overlapping_pixels to every overlapping
+    pair found by find_overlapping_grains, so that the full set of grains
+    ends up with no remaining pixel overlaps.
+    """
+
     for grain1, grain2 in overlapping_grains:
         remove_overlapping_pixels(grain1, grain2, size)
         
 def image_size(image_path):
+    """
+    Load an image and return it in RGB along with its (width, height).
+
+    Parameters
+    ----------
+    image_path : str
+        Path to the image file on disk.
+
+    Returns
+    -------
+    image_rgb : ndarray
+        Image converted from BGR (OpenCV's default) to RGB.
+    size : tuple of int
+        (width, height) of the image.
+
+    Purpose
+    -------
+    Convenience loader used wherever both the RGB image and its pixel
+    dimensions are needed together, e.g. for building masks or normalising
+    contour coordinates.
+    """
     image = cv2.imread(image_path)
     image_rgb = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
     height, width = image.shape[:2] 
     return image_rgb,(width, height)
 
 def read_contours(txt_file, size, mojo):
+    """
+    Parse normalised contour coordinates and confidences from a YOLO-style label file.
+
+    Parameters
+    ----------
+    txt_file : str
+        Path to the text file containing one annotation per line, with
+        normalised (0-1) polygon coordinates.
+    size : tuple of int
+        (width, height) used to scale normalised coordinates back to pixels.
+    mojo : int
+        Format selector. 0: line ends with a trailing confidence value to be
+        parsed separately. 1: no trailing confidence value; confidence is
+        defaulted to 1 for every contour.
+
+    Returns
+    -------
+    contours : list of ndarray
+        List of (N, 2) arrays of (x, y) pixel coordinates, one array per
+        annotation line.
+    confidences : list
+        List of confidence values (floats as strings if mojo == 0, or
+        literal 1 if mojo == 1), one per contour.
+
+    Purpose
+    -------
+    Reads YOLO-segmentation-style label files where each line encodes a
+    class label followed by a flattened, normalised polygon (and optionally
+    a trailing confidence score), and converts them into pixel-space contour
+    arrays usable with OpenCV/skimage.
+    """
     contours = []
     confidences =[]
     with open(txt_file, 'r') as file:
@@ -1827,10 +1944,7 @@ def read_contours(txt_file, size, mojo):
                     points = parts[1:]  # Skip the first element as it is just a label
                     
                     confidences.append(1)
-                    
-#                for i in range(0 ,len(points), 2):
-#                    if float(points[i]) * size[0] == width or float(points[i+1]) * size[1] == height:
-#                        pt = 1
+
                 if len(points) > 0:
                     contour = [(float(points[i]) * (size[0]), float(points[i + 1]) * (size[1])) for i in range(0, len(points), 2)]
                     contours.append(np.array(contour))
