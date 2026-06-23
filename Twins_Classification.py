@@ -238,6 +238,7 @@ class App:
         self.image_path, self.original_image = pseudoimage.main()
         print(self.image_path)
         if self.image_path is not None:
+            self.current_image = cv2.imread(self.image_path)
             self.display_image(cv2.imread(self.image_path))
             self._show_resolution_panel()
         else:

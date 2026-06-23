@@ -43,18 +43,27 @@ python Twins_Classification.py
 ```
 ### GUI Features
 The application provides four main buttons:
-1. Select Image: Open a file dialog to load an EBSD image
-2. Create Pseudocolour: Convert the selected image to pseudocolour representation
+1. Select Image: Open a file dialog to load a pseudocolour image
+2. Create Pseudocolour: Convert the selected images to pseudocolour representation (We recommend to select 0 degree, 40 degrees and 80 degrees)
 3. Simple Segmentation: Perform basic grain segmentation
 4. Twins Classification: Run advanced twins classification with PLM mapping
 
 ### Workflow
-1. Click "Select Image" to load an EBSD image (PNG/JPG/JPEG)
-2. Click "Create Pseudocolour" to generate pseudocolour visualization
-3. Choose either:
+1. Click "Select Image" to load a pseudocolour image (PNG/JPG/JPEG) or Click "Create Pseudocolour" to generate pseudocolour visualization from PLM images
+2. Choose either:
     - "Simple Segmentation" for basic grain boundary detection.
     - "Twins Classification" for advanced analysis with PLM mapping. Will show results in the side-by-side display panels.
-  
+3. If you select "Twins Classification", you will need to give a folder for the corresponding image where you have stored the 18 images (or 36) for the different orientation angles. You will need to register your images. 
+
+### Example for Twins Classification
+
+1. First step, after clicking on "Create Pseudocolour", 3 greyscale images needs to be selected and then, the name of the pseudocolour image needs to be saved. 
+![files/media/step1.PNG](files/media/step1.PNG)
+2. Resolution in µm/px needs to be entered. The image is resize to 640 pixels and the new resolution is measured to make sure it is below the threshold of the ML model.
+![files/media/step2.PNG](files/media/step2.PNG)
+3. Finally, if "Twins Classification" is selected, the orientation folder where all the greyscale images are stored needs to be selected and the final result will be displayed. 
+ ![files/media/step3.PNG](files/media/step3.PNG)
+
 ### Project Structure
 ```Code
 PLM_ML_Twins_Classification/
