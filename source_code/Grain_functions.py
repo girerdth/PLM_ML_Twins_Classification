@@ -962,19 +962,73 @@ def decompose_twins(skeleton, l1, std):
     return skeleton, branch_data
 
 def decompose_twins_2(skeleton, l1, std):
-    
+
+    """
+    Decompose a twin skeleton into separate branches.
+
+    Parameters
+    ----------
+    skeleton : binary ndarray
+        Skeletonized binary image of the twin grain.
+
+    l1 : float
+        Characteristic length parameter (passed externally).
+
+    std : float
+        Standard deviation parameter (passed externally).
+
+    Returns
+    -------
+    skeleton : ndarray
+        Updated skeleton after decomposition.
+
+    branch_data : DataFrame
+        Branch summary information extracted from skeleton.
+
+    split : int
+        Flag indicating whether a split operation occurred.
+
+    Purpose
+    -------
+    Detects:
+        1. Curved twins that likely contain merged branches
+        2. Junction structures where multiple twins intersect
+
+    Then attempts to separate them into independent branches.
+    """
+    # Convert skeleton into graph representation
     pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
+
+    # Extract skeleton branch summary
     branch_data = safe_summarize_skeleton(skeleton)
+
+    # Counter used to stop infinite decomposition loops
     no_change_count = 0
+
+    # Controls main iterative loop
     THEFINALE = 0
+
+    # Tracks whether a split happened
     split = 0
 
+    # Proceed only if skeleton is valid
     if branch_data is not None:
+
+        # Only proceed if skeleton contains one branch
         if len(branch_data) == 1:
+
+            # Main decomposition loop
             while THEFINALE == 0:
                 final_coordinates = []
-                # Case where twin is not flat because it's 2 twins
+
+                # -------------------------------------------------
+                # CASE 1:
+                # Twin is curved → likely consists of 2 twins
+                # -------------------------------------------------
+
                 for index, row in branch_data.iterrows():
+
+                    # Detect curved branch
                     if row["branch_distance"] > row["euclidean_distance"]*1.25:
                         split = 1
                         ok = 0
@@ -1017,19 +1071,25 @@ def decompose_twins_2(skeleton, l1, std):
                                      true_indices = np.argwhere(skeleton1)
                                      ok = 1
                                     
-                                         
+                        # -------------------------------------------------
+                        # Compare original and reduced branch coordinates
+                        # -------------------------------------------------
                         
                         arr1 = np.column_stack(coordinates2)
                         arr2 = np.column_stack(coordinates)
-                        # Find rows in A that are NOT in B
+
+                        # Find coordinates removed from original branch
                         mask = np.isin(arr1.view([('', arr1.dtype)]*arr1.shape[1]),
                                        arr2.view([('', arr2.dtype)]*arr2.shape[1]),
                                        invert=True).ravel()
                         
                         arr3 = arr1[mask]
+
+                        # Remaining branch after subtraction
                         skeleton2_int = skeleton.astype(int) - skeleton1.astype(int)
                         skeleton2 = skeleton2_int != 0  # or np.array(C, dtype=bool)
-                        
+
+                        # Analyze first branch
                         pixel_graph1, coordinates1 = skeleton_to_csgraph(skeleton1)
                         branch_data1 = safe_summarize_skeleton(skeleton1)
                         branch_coords = coordinates1
@@ -1042,18 +1102,24 @@ def decompose_twins_2(skeleton, l1, std):
                             
                             pixel_graph1, coordinates1 = skeleton_to_csgraph(skeleton1)
                             branch_data1 = safe_summarize_skeleton(skeleton1)
-                        
+
+                        # Analyze second branch
                         pixel_graph2, coordinates2 = skeleton_to_csgraph(skeleton2)
-                        branch_data2 = summarize(Skeleton(skeleton2), separator='_') 
-                        
+                        branch_data2 = summarize(Skeleton(skeleton2), separator='_')
+
+                        # Merge both branches
                         twin_mask = np.zeros(skeleton.shape, dtype=np.uint8)
                         twin_mask = twin_mask + skeleton1.astype(int) + skeleton2.astype(int)
-                        
+
+                        # Re-skeletonize merged result
                         skeleton = skeletonize(twin_mask > 0)
                         pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
                         branch_data = summarize(Skeleton(skeleton), separator='_') 
                         
-                #Case where there are multiple twins that form junctions
+                # -------------------------------------------------
+                # CASE 2:
+                # Multiple twin junctions exist
+                # -------------------------------------------------
                 if (branch_data["branch_type"] == 1).any(): 
                     
                     ok = 1
@@ -1093,8 +1159,8 @@ def decompose_twins_2(skeleton, l1, std):
                             ok = 0
                             
                         if len(branch_data2) == 0:
-                            ok = 0 
-                    
+                            ok = 0
+                            # Recover branch coordinates
                     for elements in branch_datas:
                         positions_f = []
                         
@@ -1143,10 +1209,14 @@ def decompose_twins_2(skeleton, l1, std):
                     skeleton = skeletonize(final_matrix > 0)
                     pixel_graph, coordinates2 = skeleton_to_csgraph(skeleton)
                     branch_data = summarize(Skeleton(skeleton), separator='_')       
-                        
+
+                # -------------------------------------------------
+                # Check whether decomposition is finished
+                # -------------------------------------------------
                 condition1 = (branch_data["branch_distance"] > branch_data["euclidean_distance"]*1.25).any()
                 condition2 = branch_data["branch_type"].isin([1, 2]).any()
-                        
+
+                # No problematic branches remain
                 if not (condition1 or condition2):
                     for m in range(len(branch_data)):
                         final_matrix = np.zeros(skeleton.shape, dtype=np.uint8)
@@ -1158,7 +1228,8 @@ def decompose_twins_2(skeleton, l1, std):
                         #plt.show()
                        
                     THEFINALE = 1
-            
+
+                # Safety stop to avoid infinite loop
                 if condition1:
                     no_change_count += 1
                     if no_change_count > 10:  # or some max iteration
@@ -1173,10 +1244,48 @@ def decompose_twins_2(skeleton, l1, std):
 
 
 def decompose_twins_grains(Grains, image, l1, std):
+    """
+    Decompose grains marked as twins into multiple branches when needed.
+
+    Parameters
+    ----------
+    Grains : list
+        List of Grain objects.
+
+    image : ndarray
+        Original image used to determine image dimensions.
+
+    l1 : float
+        Characteristic length parameter passed to decomposition function.
+
+    std : float
+        Standard deviation parameter passed to decomposition function.
+
+    Returns
+    -------
+    Grains : list
+        Updated grain list after twin decomposition.
+
+    Purpose
+    -------
+    For each grain classified as a twin:
+
+        1. Build binary mask from grain pixels
+        2. Skeletonize grain mask
+        3. Decompose skeleton branches
+        4. If multiple branches exist:
+              - Split grain into multiple grains
+              - Assign pixels to nearest branch
+              - Rebuild contours for each branch
+        5. Update grain geometry
+    """
+    # Iterate through all grain objects
     for pt, grain in enumerate(Grains):
 
+        # Create empty binary mask matching image dimensions
         twin_mask = np.zeros(np.flip(image.shape), dtype=np.uint8)
 
+        # Process only grains marked as twins
         if grain.IsTwin:
 
             # Create mask from PixelList
@@ -1186,13 +1295,17 @@ def decompose_twins_grains(Grains, image, l1, std):
                     twin_mask[x, y] = 1
                 except IndexError:
                     continue
-            if grain.ID == 129:
-                titit = 1
 
+            # Convert grain mask into skeleton representation
             skeleton = skeletonize(twin_mask > 0)
 
+            # Perform twin decomposition
             skeleton, branch_data = decompose_twins(skeleton, l1, std)
+
+            # Continue only if branch decomposition succeeded
             if branch_data is not None:
+
+                # If multiple branches exist → split grain
                 if len(branch_data) > 1:
 
                     num_branches = len(branch_data)
@@ -1221,7 +1334,9 @@ def decompose_twins_grains(Grains, image, l1, std):
                         if closest_branch >= 0:
                             branch_pixel_lists[closest_branch].append((r, c))
 
-                    # Update grain.PixelList to store multiple pixel lists
+                    # --------------------------------------------
+                    # Build new grain object for each branch
+                    # --------------------------------------------
 
                     for branch_idx, branch_pixels in enumerate(branch_pixel_lists):
                         if not branch_pixels:
@@ -1253,6 +1368,10 @@ def decompose_twins_grains(Grains, image, l1, std):
                         contour2 = np.array(contour, np.int32)
                         branch_pixels = np.array(branch_pixels)
 
+                        # ----------------------------------------
+                        # Replace original grain with first branch
+                        # ----------------------------------------
+
                         if branch_idx == 0:
                             contour_array = np.array(contour, dtype=np.int32)
                             center_x = np.mean(branch_pixels[:, 0])
@@ -1267,6 +1386,10 @@ def decompose_twins_grains(Grains, image, l1, std):
                             gr.SkeletonCoord = branch_coords_list[branch_idx]
                             Grains[pt] = gr
 
+                        # ----------------------------------------
+                        # Create new grain for additional branches
+                        # ----------------------------------------
+
                         else:
                             contour_array = np.array(contour, dtype=np.int32)
                             center_x = np.mean(branch_pixels[:, 0])
@@ -1277,9 +1400,19 @@ def decompose_twins_grains(Grains, image, l1, std):
                             gr.SkeletonCoord = branch_coords_list[branch_idx]
                             Grains.append(gr)
 
+                # --------------------------------------------
+                # Single branch case
+                # Store skeleton coordinates only
+                # --------------------------------------------
+
                 else:
 
                     grain.SkeletonCoord = Skeleton(skeleton).path_coordinates(0)
+            # --------------------------------------------
+            # Decomposition failed
+            # Use original skeleton instead
+            # --------------------------------------------
+
             else:
                 skeleton = skeletonize(twin_mask > 0)
                 true_indices = np.where(skeleton == True)
@@ -1291,9 +1424,44 @@ def decompose_twins_grains(Grains, image, l1, std):
     return Grains
     
 def decompose_twins_grains_2(Grains, image, l1, std):
-    
+
+    """
+    Decompose twin grains into individual branches based on their skeleton structure.
+
+    Parameters
+    ----------
+    Grains : list of Grain
+        List of Grain objects, some of which are flagged as twins (IsTwin).
+    image : ndarray
+        Reference image used only for its shape, to size the twin mask.
+    l1 : float
+        Parameter passed through to decompose_twins_2 controlling branch
+        decomposition sensitivity.
+    std : float
+        Standard deviation parameter passed through to decompose_twins_2.
+
+    Returns
+    -------
+    Grains : list of Grain
+        Updated list of grains. Twin grains whose skeleton splits into
+        multiple branches are replaced/appended as separate Grain objects,
+        one per branch. Non-splitting twins have their SkeletonCoord updated
+        in place.
+
+    Purpose
+    -------
+    For every grain flagged as a twin, builds a binary mask of its pixels,
+    skeletonizes it, and checks whether the skeleton decomposes into
+    multiple branches (a "split"). If so, each branch is reassigned its own
+    pixels (by nearest-distance), contour, and Grain object, so that a single
+    twin region is split into multiple twin grains. If the skeleton doesn't
+    split, the grain's SkeletonCoord is simply updated to reflect its
+    skeleton path.
+    """
+
     for pt, grain in enumerate(Grains):
-    
+
+        # Mask sized to match the image dimensions (flipped to match indexing convention)
         twin_mask = np.zeros(np.flip(image.shape), dtype=np.uint8)
         
         if grain.IsTwin:
@@ -1307,14 +1475,16 @@ def decompose_twins_grains_2(Grains, image, l1, std):
                 except IndexError:
                     continue
 
-                
-           
+            # Reduce the twin region to its 1-pixel-wide skeleton
             skeleton = skeletonize(twin_mask > 0)
 
+            # Attempt to decompose the skeleton into separate branches
             skeleton, branch_data, split = decompose_twins_2(skeleton, l1, std)
             if branch_data is not None:
                 if len(branch_data) > 1 and split == 1:
-                    
+                    # Skeleton has multiple branches and should be split into
+                    # separate grains
+
                     num_branches = len(branch_data)
                     branch_pixel_lists = [[] for _ in range(num_branches)]
                     
@@ -1325,8 +1495,9 @@ def decompose_twins_grains_2(Grains, image, l1, std):
                     branch_coords_list = []
                     for m in range(num_branches):
                         branch_coords_list.append(Skeleton(skeleton).path_coordinates(m))
-                    
-                    # Assign each skeleton pixel to the nearest branch
+
+                    # Assign each twin pixel to its nearest branch by
+                    # Euclidean distance to that branch's skeleton coordinates
                     for pixel in grain.PixelList:
                         r, c = pixel
                         min_dist = np.inf
@@ -1341,7 +1512,8 @@ def decompose_twins_grains_2(Grains, image, l1, std):
                         if closest_branch >= 0:
                             branch_pixel_lists[closest_branch].append((r, c))
                     
-                    # Update grain.PixelList to store multiple pixel lists
+                    # Build a new Grain object for each branch, deriving its
+                    # contour from the pixels assigned to that branch
                     
                     for branch_idx, branch_pixels in enumerate(branch_pixel_lists):
                         if not branch_pixels:
@@ -1374,6 +1546,8 @@ def decompose_twins_grains_2(Grains, image, l1, std):
                         branch_pixels = np.array(branch_pixels)
     
                         if branch_idx == 0:
+                            # First branch reuses the original grain's ID and
+                            # replaces it in place
                             contour_array = np.array(contour, dtype=np.int32)
                             center_x = np.mean(branch_pixels[:,0])
                             center_y = np.mean(branch_pixels[:,1])
@@ -1396,6 +1570,9 @@ def decompose_twins_grains_2(Grains, image, l1, std):
                             Grains.append(gr)
                             
                 else:
+                    # Skeleton has branch data but doesn't need splitting;
+                    # just record the combined skeleton coordinates on the
+                    # existing grain
                     num_branches = len(branch_data)
                     branch_pixel_lists = [[] for _ in range(num_branches)]
                     
@@ -1409,6 +1586,7 @@ def decompose_twins_grains_2(Grains, image, l1, std):
                     all_branch_coords = np.concatenate(branch_coords_list, axis=0)
                     grain.SkeletonCoord = all_branch_coords                    
             else :
+                # No branch data returned; fall back to a single-path skeleton
                 skeleton = skeletonize(twin_mask > 0)
                 true_indices = np.where(skeleton == True)
                 if len(true_indices[0]) > 1:
@@ -1419,6 +1597,30 @@ def decompose_twins_grains_2(Grains, image, l1, std):
     return Grains
 
 def find_overlapping_grains(grains):
+    """
+    Identify pairs of grains that share one or more pixels.
+
+    Parameters
+    ----------
+    grains : list of Grain
+        List of Grain objects, each with a PixelList attribute.
+
+    Returns
+    -------
+    overlapping_grains : list of tuple of Grain
+        List of (grain_a, grain_b) pairs whose pixel lists overlap.
+    ID_grains : list of tuple of (int, int, int)
+        List of (index_a, index_b, overlap_count) describing the same pairs
+        by their position in the input list, along with how many pixels
+        they share.
+
+    Purpose
+    -------
+    Builds a pixel-to-grain-indices lookup, then scans for pixels claimed by
+    more than one grain to detect overlapping segmentation results. Used as
+    a precursor step to resolving overlaps (see remove_overlapping_pixels).
+    """
+
     pixel_to_grains = defaultdict(list)
 
     # Map every pixel to the IDs of grains touching it
