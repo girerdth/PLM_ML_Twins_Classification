@@ -83,6 +83,47 @@ def safe_summarize_skeleton2(skeleton_img):
         return None
 
 def grain_twin_analysis(grain, grains, image_shape, Zfinal, Average_Size, background=None):
+    """
+    Classify a twin grain's relationship to its neighbours and determine its twin type.
+
+    Parameters
+    ----------
+    grain : Grain
+        The twin grain being analysed.
+    grains : list of Grain
+        Full list of grains, used to look up neighbour grains by ID.
+    image_shape : tuple of int
+        Shape of the working image, passed through for skeleton extraction.
+    Zfinal : ndarray
+        Label image mapping pixels to grain IDs (not directly used here but
+        kept for signature consistency with related functions).
+    Average_Size : float
+        Average grain size, kept for signature consistency with related
+        functions (not used directly in this function body).
+    background : ndarray, optional
+        Background image for diagnostic plotting (unused here).
+
+    Returns
+    -------
+    grain : Grain
+        The input grain, possibly updated with TwinType and MisOrientation.
+    type_issue : int
+        Classification status code:
+        -1 = not yet determined, 0 = no neighbours found, 1 = ambiguous
+        (multiple neighbours on one side), 2 = neighbours found but not
+        confirmed as parents, otherwise the type_error code returned by
+        check_twin_type.
+
+    Purpose
+    -------
+    Builds the grain's skeleton, finds its branch endpoints, and projects
+    each neighbouring grain's centroid onto the skeleton's main axis to
+    classify it as a "left" or "right" neighbour. Depending on how many
+    neighbours fall on each side, attempts to identify the twin's parent
+    grain(s) and determine whether it is a tension or compression twin via
+    check_twin_type.
+    """
+
     skeleton = get_skeleton(grain, image_shape)
     skel, branches = get_branches(skeleton)
 
@@ -108,6 +149,7 @@ def grain_twin_analysis(grain, grains, image_shape, Zfinal, Average_Size, backgr
     neighs_right_length = []
     points = endpoints[0]
 
+    # Classify each neighbour as left/right of the twin's main skeleton axis
     for nid, centroid in centroids.items():
         if nid == 70:
             kk = 1
@@ -127,6 +169,8 @@ def grain_twin_analysis(grain, grains, image_shape, Zfinal, Average_Size, backgr
             del centroids2[nid]
 
     if (len(neighs_left) == 1 and len(neighs_right) == 1):
+        # Exactly one neighbour on each side: check if they share the same
+        # orientation (i.e. are the same "parent" grain split by the twin)
         Azimuth_P, Incli_P, Parents = check_friends(neighs_left[0], neighs_right[0])
 
         if Parents == True:
@@ -137,6 +181,7 @@ def grain_twin_analysis(grain, grains, image_shape, Zfinal, Average_Size, backgr
             type_issue = 2
 
     elif (len(neighs_left) == 0 and len(neighs_right) == 1) or (len(neighs_left) == 1 and len(neighs_right) == 0):
+        # Only one side has a neighbour; use its orientation directly as the parent
         if len(neighs_right) == 1:
             Azimuth_P = neighs_right[0].Azimuth
             Incli_P = neighs_right[0].Inclination
@@ -153,14 +198,55 @@ def grain_twin_analysis(grain, grains, image_shape, Zfinal, Average_Size, backgr
             type_issue = type_error
 
     elif (len(neighs_left) >= 2 or len(neighs_right) >= 2):
+        # Ambiguous: more than one neighbour on a side
         type_issue = 1
 
     elif (len(neighs_left) == 0 and len(neighs_right) == 0):
+        # No neighbours found at all
         type_issue = 0
 
     return grain, type_issue
 
 def separate_twin(grain, neighs_left, neighs_right, image_shape, maxID, skeleton_grains):
+    """
+    Split a twin grain that bridges two neighbours into separate grain regions.
+
+    Parameters
+    ----------
+    grain : Grain
+        The twin grain being split.
+    neighs_left : Grain
+        Neighbour grain considered as one "parent" (e.g. "Dad").
+    neighs_right : Grain
+        Neighbour grain considered as the other "parent" (e.g. "Mum").
+    image_shape : tuple of int
+        Shape of the working image, used to size masks.
+    maxID : int
+        Current maximum grain ID in use, so new grains get unique IDs.
+    skeleton_grains : ndarray
+        Skeleton image of all grains; updated in place with the new contours
+        drawn by this function.
+
+    Returns
+    -------
+    the_goat : Grain
+        The grain representing the region where the two parent neighbours'
+        convex hull overlaps the original twin grain — treated as the main
+        re-derived twin grain, with Dad/Mum/Neighbours set.
+    new_granulo : list of Grain
+        Any additional grain fragments (size >= 10 pixels) derived from the
+        parts of the twin grain outside the overlap region.
+
+    Purpose
+    -------
+    Builds the convex hull of the combined pixel lists of the two neighbour
+    grains, intersects it with the twin grain's own pixels to find the
+    "shared" region, and creates a new Grain object for that overlap (tagged
+    with both parents). Any leftover twin pixels outside the overlap are
+    turned into additional new grains. Used when a single detected twin
+    region actually spans across the boundary into two distinct neighbour
+    grains and needs to be split accordingly.
+    """
     mask = np.zeros(image_shape)
 
     pixel_list = np.array(neighs_left.PixelList, dtype=int)  # Ensures integers
@@ -200,6 +286,8 @@ def separate_twin(grain, neighs_left, neighs_right, image_shape, maxID, skeleton
 
     new_granulo = []
     contour_points_list = []
+
+    # Build the contour for the overlap region (the "main" split twin)
     for contour in contours:
         contour = np.round(contour).astype(int)
         contour = np.flip(contour)
@@ -236,6 +324,8 @@ def separate_twin(grain, neighs_left, neighs_right, image_shape, maxID, skeleton
     mask2[mask_total == 2] = 0
     contours = find_contours(mask2, 0.5)
     contour_points_list = []
+
+    # Build contours for whatever twin pixels remain outside the overlap region
     for contour in contours:
         contour = np.round(contour).astype(int)
         contour = np.flip(contour)
@@ -258,7 +348,9 @@ def separate_twin(grain, neighs_left, neighs_right, image_shape, maxID, skeleton
         contour_array = np.array(contour, dtype=np.int32)
         center_x = np.mean(points[:, 0])
         center_y = np.mean(points[:, 1])
+
         if len(points[:, 0]) >= 10:
+            # Only keep leftover fragments large enough to be meaningful grains
             gr = Grain_functions.Grain(final_pts, contour_array, (center_y, center_x), len(points[:, 0]), 1,
                                        maxID + i + 1)
             gr.PixelList = [(int(y), int(x)) for x, y in points]
@@ -273,6 +365,24 @@ def separate_twin(grain, neighs_left, neighs_right, image_shape, maxID, skeleton
 
 
 def find_max_ID(grains):
+    """
+    Find the highest grain ID currently in use.
+
+    Parameters
+    ----------
+    grains : list of Grain
+        List of Grain objects, each with an ID attribute.
+
+    Returns
+    -------
+    max_ID : int
+        The largest ID found among the grains (0 if the list is empty).
+
+    Purpose
+    -------
+    Used to generate unique IDs for newly created grains (e.g. when
+    splitting twins) without colliding with existing IDs.
+    """
     max_ID = 0
     for gr in grains:
         if gr.ID > max_ID:
@@ -284,6 +394,37 @@ def find_max_ID(grains):
 def misorientation_angle(euler1, euler2, m, degrees=True):
     """
     Compute misorientation angle between two orientations given as Euler triplets.
+
+    Parameters
+    ----------
+    euler1 : array-like of float
+        First orientation as (azimuth, inclination, rotation) in degrees.
+    euler2 : array-like of float
+        Second orientation as (azimuth, inclination, rotation) in degrees.
+    m : int
+        Symmetry-equivalence index (0-15) selecting which combination of
+        180-degree azimuth shifts and inclination mirroring (180 - angle)
+        to apply before computing the angle. This enumerates the crystal
+        symmetry-equivalent orientations so the true minimum misorientation
+        can be found by calling this function for all 16 values of m.
+    degrees : bool, optional
+        Present for interface consistency; angles are returned in degrees
+        regardless (computed via final_angle).
+
+    Returns
+    -------
+    error_angle : float
+        Angle (degrees) between the two orientation vectors after applying
+        the symmetry operation selected by m.
+
+    Purpose
+    -------
+    Applies one of 16 possible symmetry-equivalent transformations to the
+    two input Euler angle sets (covering azimuth +180 degree shifts and
+    inclination mirroring, individually or combined) and then computes the
+    angle between the resulting orientation vectors via final_angle. Calling
+    this across all m values and taking the minimum yields the true
+    misorientation angle accounting for crystal symmetry.
     """
 
     euler1 = np.array(euler1)
@@ -345,6 +486,25 @@ def misorientation_angle(euler1, euler2, m, degrees=True):
     return error_angle
 
 def rotx(angle_deg):
+    """
+    Build a 3D rotation matrix about the X axis.
+
+    Parameters
+    ----------
+    angle_deg : float
+        Rotation angle in degrees.
+
+    Returns
+    -------
+    ndarray
+        3x3 rotation matrix about the X axis.
+
+    Purpose
+    -------
+    Used to rotate orientation vectors when converting azimuth/inclination
+    angles into 3D direction vectors (see final_angle, final_angle_rot).
+    """
+
     angle_rad = np.deg2rad(angle_deg)
     c, s = np.cos(angle_rad), np.sin(angle_rad)
     return np.array([[1, 0, 0],
@@ -352,6 +512,25 @@ def rotx(angle_deg):
                      [0, s, c]])
 
 def rotz(angle_deg):
+    """
+    Build a 3D rotation matrix about the Z axis.
+
+    Parameters
+    ----------
+    angle_deg : float
+        Rotation angle in degrees.
+
+    Returns
+    -------
+    ndarray
+        3x3 rotation matrix about the Z axis.
+
+    Purpose
+    -------
+    Used to rotate orientation vectors when converting azimuth/inclination
+    angles into 3D direction vectors (see final_angle, final_angle_rot).
+    """
+
     angle_rad = np.deg2rad(angle_deg)
     c, s = np.cos(angle_rad), np.sin(angle_rad)
     return np.array([[c, -s, 0],
@@ -361,6 +540,35 @@ def rotz(angle_deg):
 
 # --- Step 5: Project and classify neighbour ---
 def is_projection_inside_segment(pt1, pt2, centroid, tol=1e-2):
+    """
+    Check whether a point's projection falls within a (slightly shortened) line segment.
+
+    Parameters
+    ----------
+    pt1 : ndarray
+        First endpoint of the segment.
+    pt2 : ndarray
+        Second endpoint of the segment.
+    centroid : ndarray
+        Point being tested (typically a neighbour grain's centroid).
+    tol : float, optional
+        Tolerance allowed below 0 when checking the projection length
+        (default 1e-2).
+
+    Returns
+    -------
+    bool
+        True if the projection of centroid onto the segment direction falls
+        between 0 (minus tol) and the segment's length, False otherwise.
+
+    Purpose
+    -------
+    The segment between pt1 and pt2 is first shortened by 5% at each end
+    (to avoid edge effects near the true endpoints), then centroid is
+    projected onto that shortened segment's direction. Used to test whether
+    a neighbouring grain's centroid lies "alongside" the twin's skeleton
+    axis, as a precursor to classifying it as a left/right neighbour.
+    """
     vec = pt2 - pt1
     pt1 = np.array(pt1)
     pt2 = np.array(pt2)
@@ -377,6 +585,39 @@ def is_projection_inside_segment(pt1, pt2, centroid, tol=1e-2):
 
 
 def is_left_or_right(pt1, pt2, centroid, tol=1e-2):
+    """
+    Classify a point as lying to the left or right of a line segment.
+
+    Parameters
+    ----------
+    pt1 : ndarray
+        First endpoint of the reference segment.
+    pt2 : ndarray
+        Second endpoint of the reference segment.
+    centroid : ndarray
+        Point being classified (typically a neighbour grain's centroid).
+    tol : float, optional
+        Unused tolerance kept for signature consistency with
+        is_projection_inside_segment.
+
+    Returns
+    -------
+    proj_length : float
+        Distance along the (shortened) segment direction where centroid
+        projects onto it.
+    bool
+        True if centroid lies to the "left" of the segment (per the sign of
+        the cross product's Z component), False if to the "right".
+
+    Purpose
+    -------
+    Computes the perpendicular offset vector from the segment to centroid,
+    then uses the Z component of the cross product between the segment
+    direction and that offset vector to determine which side of the
+    segment the point falls on. Used by grain_twin_analysis and
+    find_parents_separate_twins to sort neighbouring grains into "left" and
+    "right" groups relative to a twin's skeleton axis.
+    """
     vec = pt2 - pt1
     pt1 = np.array(pt1)
     pt2 = np.array(pt2)
@@ -406,6 +647,30 @@ def is_left_or_right(pt1, pt2, centroid, tol=1e-2):
 
 
 def misorentation_between_angles(grain1, grain2):
+    """
+    Compute misorientation angles between two grains across all symmetry equivalents.
+
+    Parameters
+    ----------
+    grain1 : Grain
+        First grain, must have Azimuth and Inclination attributes.
+    grain2 : Grain
+        Second grain, must have Azimuth and Inclination attributes.
+
+    Returns
+    -------
+    angles : ndarray
+        Array of 16 misorientation angles (degrees), one for each symmetry
+        operation enumerated by misorientation_angle.
+
+    Purpose
+    -------
+    Convenience wrapper that builds Euler angle tuples from two grains'
+    orientations and evaluates misorientation_angle for all 16 symmetry
+    cases, returning the full array rather than just the minimum. Note: as
+    written, both Euler tuples use grain2's Inclination (Phi1) — this
+    matches the existing behaviour and has not been altered here.
+    """
     A = []
 
     phi1 = grain1.Azimuth
@@ -426,6 +691,44 @@ def misorentation_between_angles(grain1, grain2):
 
 
 def check_twin_type(grain, Azimuth_P, Incli_P, Error_Angle=10):
+    """
+    Determine whether a twin grain is a Tension or Compression twin.
+
+    Parameters
+    ----------
+    grain : Grain
+        The twin grain being classified; must have Azimuth and Inclination
+        attributes.
+    Azimuth_P : float
+        Azimuth (degrees) of the parent grain's orientation.
+    Incli_P : float
+        Inclination (degrees) of the parent grain's orientation.
+    Error_Angle : float, optional
+        Tolerance window (degrees) around each reference angle used to
+        decide a match (default 10).
+
+    Returns
+    -------
+    grain : Grain
+        The input grain, with TwinType set to "Tension" or "Compression" if
+        exactly one type matched.
+    miso : ndarray
+        Array of 16 misorientation angles (one per symmetry case) between
+        the twin and its parent orientation.
+    type_error : int
+        Status code: -1 = default/unset, 3 = no matching twin type found,
+        4 = ambiguous (matched both Tension and Compression reference
+        angles).
+
+    Purpose
+    -------
+    Compares the twin/parent misorientation against four reference angles
+    known from titanium twinning crystallography (two associated with
+    Tension twins, two with Compression twins). If the misorientation falls
+    within Error_Angle of exactly one twin family's reference angles, the
+    grain's TwinType is set accordingly; otherwise an error code flags
+    ambiguity or no match.
+    """
     A = []
 
     phi1 = grain.Azimuth
@@ -453,11 +756,13 @@ def check_twin_type(grain, Azimuth_P, Incli_P, Error_Angle=10):
 
     miso = np.array(miso)  # ensure it's an ndarray
 
+    # Check whether the misorientation matches either Tension reference angle
     if np.any((miso <= angle_T1 + Error_Angle / 2) & (miso >= angle_T1 - Error_Angle / 2)):
         found_types.add("Tension")
     if np.any((miso <= angle_T2 + Error_Angle / 2) & (miso >= angle_T2 - Error_Angle / 2)):
         found_types.add("Tension")
 
+    # Check whether the misorientation matches either Compression reference angle
     if np.any((miso <= angle_C1 + Error_Angle / 2) & (miso >= angle_C1 - Error_Angle / 2)):
         found_types.add("Compression")
     if np.any((miso <= angle_C2 + Error_Angle / 2) & (miso >= angle_C2 - Error_Angle / 2)):
@@ -477,6 +782,40 @@ def check_twin_type(grain, Azimuth_P, Incli_P, Error_Angle=10):
 
 
 def check_friends(studied_grain, studied_grain2, Error_Angle=10):
+    """
+    Check whether two neighbouring grains share a common parent orientation.
+
+    Parameters
+    ----------
+    studied_grain : Grain
+        First neighbour grain, must have Azimuth, Inclination, size, and ID
+        attributes.
+    studied_grain2 : Grain
+        Second neighbour grain, with the same required attributes.
+    Error_Angle : float, optional
+        Maximum misorientation angle (degrees) for the two grains to be
+        considered the same parent orientation (default 10).
+
+    Returns
+    -------
+    Azimuth : float
+        Azimuth of whichever grain is larger by size.
+    Inclination : float
+        Inclination of whichever grain is larger by size.
+    bool
+        True if the minimum misorientation angle is within Error_Angle
+        (i.e. the two grains are likely the same parent), False otherwise.
+
+    Purpose
+    -------
+    Computes the minimum misorientation angle (mod 180) between the two
+    grains across all 16 symmetry cases. If it's within tolerance, the pair
+    is treated as the same parent grain (split on either side of a twin),
+    and the orientation of the larger grain is returned as representative.
+    Used by grain_twin_analysis and find_parents_separate_twins to confirm
+    that left/right neighbours of a twin are genuinely the same parent.
+    """
+
     A = []
 
     phi1 = studied_grain.Azimuth
@@ -522,6 +861,33 @@ def check_friends(studied_grain, studied_grain2, Error_Angle=10):
         return Azimuth, Inclination, False
 
 def final_angle(azi_ejm, incli_ejm, azi_ebsd, incli_ebsd):
+    """
+    Compute the angle between two orientation vectors defined by azimuth/inclination.
+
+    Parameters
+    ----------
+    azi_ejm : float
+        Azimuth (degrees) of the first orientation (e.g. from optical/EJM data).
+    incli_ejm : float
+        Inclination (degrees) of the first orientation.
+    azi_ebsd : float
+        Azimuth (degrees) of the second orientation (e.g. from EBSD data).
+    incli_ebsd : float
+        Inclination (degrees) of the second orientation.
+
+    Returns
+    -------
+    error_angle : float
+        Angle (degrees) between the two resulting 3D orientation vectors.
+
+    Purpose
+    -------
+    Converts each azimuth/inclination pair into a 3D unit vector by
+    rotating the optical axis [0, 0, 1] first about X (inclination) then
+    about Z (azimuth), then returns the angle between the two vectors via
+    the dot product. This is the core angle calculation used throughout
+    misorientation_angle and related comparison functions.
+    """
     point1 = np.array([0, 0, 1])  # Optical axis
 
     # EJM orientation
@@ -541,6 +907,38 @@ def final_angle(azi_ejm, incli_ejm, azi_ebsd, incli_ebsd):
     return error_angle
 
 def final_angle_rot(azi_ejm, incli_ejm, rot_ejm, azi_ebsd, incli_ebsd, rot_ebsd):
+    """
+    Compute the angle between two orientation vectors, including an extra rotation term.
+
+    Parameters
+    ----------
+    azi_ejm : float
+        Azimuth (degrees) of the first orientation.
+    incli_ejm : float
+        Inclination (degrees) of the first orientation.
+    rot_ejm : float
+        Additional initial rotation (degrees) about Z for the first
+        orientation, applied before the inclination/azimuth rotations.
+    azi_ebsd : float
+        Azimuth (degrees) of the second orientation.
+    incli_ebsd : float
+        Inclination (degrees) of the second orientation.
+    rot_ebsd : float
+        Additional initial rotation (degrees) about Z for the second
+        orientation.
+
+    Returns
+    -------
+    error_angle : float
+        Angle (degrees) between the two resulting 3D orientation vectors.
+
+    Purpose
+    -------
+    Same as final_angle, but allows an extra initial Z-rotation (rot_ejm /
+    rot_ebsd) to be applied to each orientation before the standard
+    inclination/azimuth rotation sequence. Used where an extra in-plane
+    rotation parameter is relevant to the comparison.
+    """
     point1 = np.array([0, 0, 1])  # Optical axis
 
     # EJM orientation
@@ -562,6 +960,27 @@ def final_angle_rot(azi_ejm, incli_ejm, rot_ejm, azi_ebsd, incli_ebsd, rot_ebsd)
 def subtract_contours_from_skeleton(skeleton, contours):
     """
     Remove filled contours from skeleton.
+
+    Parameters
+    ----------
+    skeleton : ndarray
+        Binary/uint8 skeleton image to subtract contours from.
+    contours : list of ndarray
+        List of (N, 2) integer contour coordinate arrays to remove.
+
+    Returns
+    -------
+    skeleton : ndarray
+        Copy of the input skeleton with each contour's interior filled with
+        0 and its outline redrawn at value 255.
+
+    Purpose
+    -------
+    Used to erase twin-grain regions from the overall grain skeleton, so
+    that the remaining skeleton represents only the boundaries between
+    "regular" (non-twin) grains. The outline is redrawn after filling so
+    the twin boundary itself still acts as a grain boundary in the
+    remaining skeleton.
     """
     skeleton = skeleton.copy()
 
@@ -581,6 +1000,42 @@ def extract_grains_from_skeleton(
 ):
     """
     Extract Grain objects from a skeleton image.
+
+    Parameters
+    ----------
+    skeleton : ndarray
+        Binary/uint8 skeleton image where grain boundaries are traced.
+    pad : int, optional
+        Number of pixels of constant-1 padding to add around the skeleton
+        before processing (default 0), useful to ensure grains touching the
+        image edge are still closed regions.
+    dilation_kernel : tuple of int, optional
+        Kernel size used to dilate the skeleton before labelling regions
+        (default (3, 3)), which helps close small gaps in the boundary.
+    contour_shift : tuple of int, optional
+        Offset (dx, dy) subtracted from extracted contour coordinates,
+        typically used to undo the padding applied via `pad` (default (0, 0)).
+    start_id : int, optional
+        ID assigned to the first extracted grain; subsequent grains get
+        consecutive IDs (default 1).
+    mark_twinning : bool, optional
+        If True, flags every extracted grain as a twin via is_twinning(True)
+        (default False).
+
+    Returns
+    -------
+    grains : list of Grain
+        List of Grain objects, one per labelled region found in the
+        (dilated, inverted) skeleton, excluding any region with no interior
+        points.
+
+    Purpose
+    -------
+    Dilates the skeleton boundaries slightly, labels the connected regions
+    of background (i.e. the grain interiors) using the inverted dilated
+    mask, and builds a Grain object for each region from its contour and
+    interior pixel list. This is the core routine that turns a boundary
+    skeleton image into a structured list of grains.
     """
     if pad > 0:
         skeleton = np.pad(skeleton, pad, constant_values=1)
@@ -629,11 +1084,47 @@ def extract_grains_from_skeleton(
 def skeletonize_binary(binary_img):
     """
     Skeletonize a binary image and return uint8 (0 or 255)
+
+    Parameters
+    ----------
+    binary_img : ndarray
+        Input image, any dtype convertible to boolean (nonzero = foreground).
+
+    Returns
+    -------
+    ndarray
+        Skeletonized image as uint8, with skeleton pixels set to 255 and
+        background to 0.
+
+    Purpose
+    -------
+    Thin wrapper around skimage's skeletonize that returns a displayable/
+    OpenCV-compatible uint8 image instead of a boolean array, for use with
+    OpenCV drawing and contour-finding functions elsewhere in this module.
     """
     ske = skeletonize(binary_img.astype(bool))
     return (ske.astype(np.uint8) * 255)
 
 def delete_small_twins(Grains):
+    """
+    Remove twin grains below a minimum pixel-count threshold.
+
+    Parameters
+    ----------
+    Grains : list of Grain
+        List of Grain objects, some flagged as twins (IsTwin).
+
+    Returns
+    -------
+    Grains : list of Grain
+        The input list with any twin grain of size <= 5 pixels removed.
+
+    Purpose
+    -------
+    Filters out spurious tiny twin detections (5 pixels or fewer) that are
+    unlikely to represent real microstructural twins, cleaning up the grain
+    list before further analysis.
+    """
     index = []
 
     for i, gr in enumerate(Grains):
@@ -647,6 +1138,30 @@ def delete_small_twins(Grains):
     return Grains
 
 def poly_line(gr):
+    """
+    Build a valid Shapely geometry from a grain's contour points.
+
+    Parameters
+    ----------
+    gr : Grain
+        Grain object with a ContourPoints attribute (an (N, 2) array of
+        coordinates).
+
+    Returns
+    -------
+    geom : shapely.geometry.base.BaseGeometry
+        A Polygon if 3+ contour points are available, a LineString for 2
+        points, a Point for 1 point, or an empty Point if there are no
+        points. The geometry is repaired (made valid) if necessary.
+
+    Purpose
+    -------
+    Converts a grain's raw contour point array into a proper Shapely
+    geometry suitable for spatial operations (area, intersection, spatial
+    indexing via STRtree). Self-intersecting or otherwise invalid polygons
+    are repaired using make_valid (or buffer(0) as a fallback for older
+    Shapely versions) so downstream geometric operations don't fail.
+    """
     pts = gr.ContourPoints
 
     # 1) Build the raw geometry
@@ -676,6 +1191,25 @@ def check_peaks(grains):
     """
     Verifies all Inclination values are valid: not None, finite, and numeric (float or convertible to float).
     Inclination can be zero.
+
+    Parameters
+    ----------
+    grains : list of Grain
+        List of Grain objects, each expected to have an Inclination
+        attribute.
+
+    Returns
+    -------
+    None
+        Prints a success message if all grains pass; raises ValueError on
+        the first invalid grain found.
+
+    Purpose
+    -------
+    Sanity-check run after orientation estimation (e.g. after
+    Peaks_Optimized) to catch grains whose Inclination ended up as None,
+    non-numeric, or non-finite before they propagate further into the
+    pipeline and cause harder-to-diagnose errors downstream.
     """
     for i, grain in enumerate(grains):
         incl = grain.Inclination
@@ -698,6 +1232,36 @@ def check_peaks(grains):
 
 
 def gray_mean(grain_stats, folder):
+    """
+    Compute per-grain mean grayscale intensity across a stack of orientation images.
+
+    Parameters
+    ----------
+    grain_stats : list of Grain
+        List of Grain objects, each with a PixelList attribute giving
+        (x, y) pixel coordinates belonging to that grain.
+    folder : str
+        Path to a folder of PNG images (one per acquisition orientation),
+        sorted numerically by filename.
+
+    Returns
+    -------
+    grain_stats : list of Grain
+        The input list, with each grain's GrayMean (array of per-image mean
+        intensities) and Position (mean pixel coordinates) updated.
+    gray_mean_array.mean(axis=0) : ndarray
+        Empty array if no files are found; otherwise the average (across
+        all grains) of mean intensity for each image in the stack.
+
+    Purpose
+    -------
+    For every grain, precomputes its pixel index arrays (clipped to image
+    bounds), then loops over every grayscale image in the folder computing
+    the mean intensity at those pixel locations. This produces, for each
+    grain, a profile of mean brightness as a function of acquisition
+    orientation, the raw data later used by Peaks_Optimized to estimate
+    crystallographic orientation.
+    """
     files = sorted(glob.glob(os.path.join(folder, '*.png')), key=extract_number2)
     if not files: return grain_stats, np.array([])
 
@@ -735,9 +1299,36 @@ def gray_mean(grain_stats, folder):
     return grain_stats, gray_mean_array.mean(axis=0)
 
 def select_orientation_folder(original_path, current_directory):
+    """
+    Prompt the user to select the folder containing orientation images.
+
+    Parameters
+    ----------
+    original_path : object
+        Unused parameter, kept for call-site signature compatibility.
+    current_directory : object
+        Unused parameter, kept for call-site signature compatibility.
+
+    Returns
+    -------
+    file_paths : str
+        Path to the selected folder.
+
+    Raises
+    ------
+    ValueError
+        If no folder is selected, or if the selected folder contains no
+        PNG images.
+
+    Purpose
+    -------
+    Opens a Tkinter directory-selection dialog (with a hidden root window)
+    so the user can pick the folder of per-orientation grayscale images
+    used throughout the rest of the pipeline (e.g. by gray_mean).
+    """
+
     root = tk.Tk()
     root.withdraw()
-
 
     file_paths = filedialog.askdirectory(title="Select orientation folder")
 
@@ -754,9 +1345,55 @@ def select_orientation_folder(original_path, current_directory):
     return file_paths
 
 def color_mask(image, color, tol=10):
+    """
+    Build a boolean mask of pixels matching a target color within a tolerance.
+
+    Parameters
+    ----------
+    image : ndarray
+        Image array of shape (H, W, 3).
+    color : array-like
+        Target RGB/BGR color to match, shape (3,).
+    tol : int, optional
+        Maximum per-channel absolute difference allowed for a match
+        (default 10).
+
+    Returns
+    -------
+    ndarray of bool
+        Boolean mask of shape (H, W), True where all channels are within
+        tol of the target color.
+
+    Purpose
+    -------
+    Simple utility for isolating pixels of a specific color in pseudocolour
+    or classification overlay images, e.g. to extract just the "Tension" or
+    "Compression" twin coloring.
+    """
     return np.all(np.abs(image - color) <= tol, axis=2)
 
 def extract_number2(file_name):
+    """
+    Extract the first integer found in a filename, for use as a sort key.
+
+    Parameters
+    ----------
+    file_name : str
+        Path or filename, e.g. "5_Input_Test.png".
+
+    Returns
+    -------
+    int
+        The first integer found in the basename of file_name, or
+        float('inf') if no digits are found (sorting such files last).
+
+    Purpose
+    -------
+    Used as the `key` function in sorted()/glob calls throughout this module
+    to ensure orientation images are processed in correct numeric order
+    (e.g. "2_..." before "10_..."), rather than the lexicographic order
+    that plain string sorting would give.
+    """
     base_name = os.path.basename(file_name)
     match = re.search(r'(\d+)', base_name)
     if match:
@@ -908,6 +1545,24 @@ def check_grains(grains):
     """
     Verifies all PixelList arrays are of integer type.
     If any non-integer or invalid entries are found, the function raises an error and exits.
+
+    Parameters
+    ----------
+    grains : list of Grain
+        List of Grain objects, each expected to have a PixelList attribute.
+
+    Returns
+    -------
+    None
+        Prints a success message if all grains pass; raises ValueError on
+        the first invalid grain found.
+
+    Purpose
+    -------
+    Sanity-check run at several points in the pipeline to catch grains
+    whose PixelList has drifted into a non-integer or non-finite dtype
+    (which would silently corrupt downstream pixel-indexing operations)
+    before they cause harder-to-diagnose errors.
     """
     for grain in grains:
         pixels = np.array(grain.PixelList)
@@ -922,6 +1577,29 @@ def check_grains(grains):
 
 # --- Step 1: Generate Skeleton from Pixel List ---
 def get_skeleton(grain, image_shape):
+    """
+    Build a skeletonized mask for a grain, from its pixel list or precomputed skeleton.
+
+    Parameters
+    ----------
+    grain : Grain
+        Grain object with PixelList and SkeletonCoord attributes.
+    image_shape : tuple of int
+        Shape of the mask to create.
+
+    Returns
+    -------
+    skeleton : ndarray of bool
+        Skeletonized boolean mask of the grain.
+
+    Purpose
+    -------
+    If the grain doesn't yet have a precomputed SkeletonCoord, builds a mask
+    from its full PixelList and skeletonizes it. Otherwise, re-skeletonizes
+    using the already-stored SkeletonCoord (typically faster/cleaner since
+    it avoids re-deriving the skeleton from the full grain area). Used as
+    the entry point for branch/endpoint analysis on twin grains.
+    """
     if len(grain.SkeletonCoord) == 0:
         mask = np.zeros(image_shape, dtype=bool)
         twin_pixels = np.array(grain.PixelList)
@@ -937,6 +1615,29 @@ def get_skeleton(grain, image_shape):
 
 # --- Step 2: Extract branches from skeleton ---
 def get_branches(skeleton):
+    """
+    Build a skan Skeleton object and summarize its branches.
+
+    Parameters
+    ----------
+    skeleton : ndarray of bool
+        Skeletonized mask.
+
+    Returns
+    -------
+    skel : skan.Skeleton
+        The skan Skeleton object wrapping the input mask, giving access to
+        node coordinates and branch topology.
+    branches : pandas.DataFrame
+        Branch summary table (one row per branch) as returned by
+        skan.summarize.
+
+    Purpose
+    -------
+    Thin wrapper around skan's Skeleton/summarize calls, used wherever
+    branch endpoint coordinates are needed (see
+    get_branch_endpoints_centroid).
+    """
     skel = Skeleton(skeleton)
     branches = summarize(skel, separator='_')
     return skel, branches
@@ -944,6 +1645,36 @@ def get_branches(skeleton):
 
 # --- Step 3: Get branch endpoints ---
 def get_branch_endpoints_centroid(skel, branches, grain):
+    """
+    Extract branch endpoint coordinates and the grain's centroid.
+
+    Parameters
+    ----------
+    skel : skan.Skeleton
+        Skeleton object as returned by get_branches, providing node
+        coordinates.
+    branches : pandas.DataFrame
+        Branch summary table with source/destination node indices in
+        columns 1 and 2.
+    grain : Grain
+        Grain object with a Centroid attribute.
+
+    Returns
+    -------
+    endpoints : list of tuple of ndarray
+        List of (pt1, pt2) coordinate pairs, one per branch, giving the
+        source and destination node coordinates of that branch.
+    centroid_int : ndarray
+        The grain's centroid, transposed and cast to int64.
+
+    Purpose
+    -------
+    Converts the skan branch table's source/destination node indices into
+    actual pixel coordinates via skel.coordinates, and prepares the grain's
+    centroid in a matching integer format. The resulting endpoints list is
+    used as the reference axis for classifying neighbouring grains as
+    left/right (see is_left_or_right).
+    """
     endpoints = []
     centroid = []
     for _, row in branches.iterrows():
@@ -962,6 +1693,28 @@ def get_branch_endpoints_centroid(skel, branches, grain):
 
 # --- Step 4: Get centroids of neighbour grains ---
 def compute_centroids(grain_ids, grains):
+    """
+    Compute the pixel-mean centroid for a set of grains by ID.
+
+    Parameters
+    ----------
+    grain_ids : iterable of int
+        IDs of the grains whose centroids should be computed.
+    grains : list of Grain
+        Full list of Grain objects to search.
+
+    Returns
+    -------
+    centroids : dict
+        Mapping from grain ID to its centroid (mean of PixelList, as an
+        ndarray), for every grain in grains whose ID is in grain_ids.
+
+    Purpose
+    -------
+    Used by grain_twin_analysis and find_parents_separate_twins to get the
+    spatial centroid of each neighbour grain, which is then projected onto
+    a twin grain's skeleton axis to classify it as left/right.
+    """
     centroids = {}
     for gr in grains:
         if gr.ID in grain_ids:
@@ -970,6 +1723,29 @@ def compute_centroids(grain_ids, grains):
     return centroids
 
 def check_twins(Grains, list_grains):
+    """
+    Remove twin grain IDs from a list of neighbour IDs.
+
+    Parameters
+    ----------
+    Grains : list of Grain
+        Full list of Grain objects to search.
+    list_grains : list of int
+        List (or set) of grain IDs to filter, typically a grain's neighbour
+        ID list.
+
+    Returns
+    -------
+    list_grains : list of int
+        The input list, with the ID of any grain flagged IsTwin removed.
+
+    Purpose
+    -------
+    Used when assigning neighbour relationships (see
+    get_optimized_neighbours) so that twin grains themselves are not
+    counted as "neighbours" for the purposes of orientation comparison —
+    only true grain-to-grain boundaries matter for that analysis.
+    """
     for grain in Grains:
 
         if grain.ID in list_grains:
@@ -980,6 +1756,34 @@ def check_twins(Grains, list_grains):
     return list_grains
 
 def get_optimized_neighbours(Grainstats, image_input):
+    """
+    Compute pixel-adjacency-based neighbour relationships for all grains.
+
+    Parameters
+    ----------
+    Grainstats : list of Grain
+        List of Grain objects, each with PixelList, ID, IsTwin, and
+        HaveFriends attributes.
+    image_input : ndarray or tuple of int
+        Either an image array (its .shape[:2] is used) or a shape tuple
+        directly, defining the working image dimensions.
+
+    Returns
+    -------
+    Grainstats : list of Grain
+        The input list, with each grain's Neighbours attribute updated
+        (only for grains flagged IsTwin or HaveFriends; others get an empty
+        list).
+
+    Purpose
+    -------
+    Rasterizes every grain's PixelList into a label image (z_final), then
+    finds all pairs of differing, nonzero labels that are adjacent
+    horizontally or vertically (a fast vectorized grid-shift approach
+    rather than per-pixel neighbour checks). Builds an adjacency dictionary
+    from these pairs, then assigns each twin/HaveFriends grain its set of
+    neighbour IDs (excluding other twins, via check_twins).
+    """
     # Detect if image or shape was passed
     if hasattr(image_input, 'shape'):
         shape = image_input.shape[:2]
@@ -1027,6 +1831,52 @@ def get_optimized_neighbours(Grainstats, image_input):
 
 
 def find_parents_separate_twins(grains, image_shape, Zfinal, Average_Size, skeleton_grains, background=None):
+    """
+    Identify parent grains for each twin and split twins spanning two parents.
+
+    Parameters
+    ----------
+    grains : list of Grain
+        List of Grain objects, some flagged as twins (IsTwin).
+    image_shape : tuple of int
+        Shape of the working image, used for skeleton extraction and
+        twin-splitting masks.
+    Zfinal : ndarray
+        Label image mapping pixels to grain IDs (not directly used in this
+        function body; kept for signature consistency with related
+        functions).
+    Average_Size : float
+        Average grain size (not used directly in this function body; kept
+        for signature consistency).
+    skeleton_grains : ndarray
+        Skeleton image of all grains, passed through to separate_twin where
+        it is updated in place with new contour drawings.
+    background : ndarray, optional
+        Background image for diagnostic plotting (unused here).
+
+    Returns
+    -------
+    grains : list of Grain
+        The input list, with each twin grain's Dad/Mum attributes set where
+        a single parent pair was identified, and with new grain objects
+        appended (or existing ones replaced) where a twin spanning two
+        distinct parent grains was split via separate_twin.
+
+    Purpose
+    -------
+    For every twin grain, projects its neighbouring grains' centroids onto
+    its skeleton axis to classify them as left/right (mirroring
+    grain_twin_analysis), then:
+    - if exactly one neighbour exists on each side and they are confirmed to
+      be the same parent (via check_friends), records Dad/Mum directly;
+    - if only one side has a neighbour, uses it directly as the (single)
+      parent;
+    - if there are multiple neighbours on both sides (in equal numbers),
+      sorts them by projection distance, takes the closest pair, confirms
+      they're the same parent, and if so calls separate_twin to split the
+      twin region between the two parents, appending any resulting grain
+      fragments.
+    """
     for i, grain in enumerate(grains):
 
         if grain.IsTwin:
@@ -1050,6 +1900,7 @@ def find_parents_separate_twins(grains, image_shape, Zfinal, Average_Size, skele
             neighs_right_length = []
             points = endpoints[0]
 
+            # Classify each neighbour as left/right of the twin's skeleton axis
             for nid, centroid in centroids.items():
                 if nid == 70:
                     kk = 1
@@ -1069,13 +1920,15 @@ def find_parents_separate_twins(grains, image_shape, Zfinal, Average_Size, skele
                     del centroids2[nid]
 
             if (len(neighs_left) == 1 and len(neighs_right) == 1):
+                # One neighbour on each side: confirm they're the same parent
+                # and record Dad/Mum
                 Azimuth_P, Incli_P, Parents = check_friends(neighs_left[0], neighs_right[0])
-                # plot_projection_inside(grain, image_shape, neighs_left[0], neighs_right[0])
                 if Parents == True:
                     grain.Dad = neighs_left[0].ID
                     grain.Mum = neighs_right[0].ID
             elif (len(neighs_left) == 0 and len(neighs_right) == 1) or (
                     len(neighs_left) == 1 and len(neighs_right) == 0):
+                # Only one side has a neighbour: use it as the single parent
                 if len(neighs_right) == 1:
                     Azimuth_P = neighs_right[0].Azimuth
                     Incli_P = neighs_right[0].Inclination
@@ -1088,7 +1941,8 @@ def find_parents_separate_twins(grains, image_shape, Zfinal, Average_Size, skele
                     Parents = True
 
             elif (len(neighs_left) == len(neighs_right)) and (len(neighs_right) > 1):
-                # elif (len(neighs_left) == len(neighs_right)) or (len(neighs_right) > 1):
+                # Multiple neighbours on both sides, equal counts: sort by
+                # projection distance and try the closest pair as parents
                 neighs_left = [val for _, val in sorted(zip(neighs_left_length, neighs_left))]
                 neighs_right = [val for _, val in sorted(zip(neighs_right_length, neighs_right))]
                 neighs_left_length = [val for _, val in sorted(zip(neighs_left_length, neighs_left_length))]
@@ -1096,27 +1950,41 @@ def find_parents_separate_twins(grains, image_shape, Zfinal, Average_Size, skele
 
                 Azimuth_P, Incli_P, Parents = check_friends(neighs_left[0], neighs_right[0])
                 if Parents == True:
+                    # Confirmed two distinct parents: split the twin grain
+                    # between them
                     the_goat, new_granulo = separate_twin(grain, neighs_left[0], neighs_right[0], image_shape,
                                                           find_max_ID(grains), skeleton_grains)
                     if new_granulo:
                         for gr in new_granulo:
-                            # skeleton = get_skeleton(gr, image_shape)
-                            # skel, branches = get_branches(skeleton)
-                            # gr.SkeletonCoord = Skeleton(skeleton).path_coordinates(0)
                             grains.append(gr)
-                    # skeleton = get_skeleton(the_goat, image_shape)
-                    # the_goat.SkeletonCoord = Skeleton(skeleton).path_coordinates(0)
                     grains[i] = the_goat
-
-
-
-            else:
-                totot = 3
-
     return grains
 
 
 def measure_contour_length(contour):
+    """
+    Measure the total perimeter length of a closed contour.
+
+    Parameters
+    ----------
+    contour : ndarray
+        (N, 2) array of contour point coordinates.
+
+    Returns
+    -------
+    length : float
+        Sum of Euclidean distances between consecutive contour points
+        (not including the final closing segment back to the first point,
+        despite that segment being computed — see Purpose).
+
+    Purpose
+    -------
+    Sums the Euclidean distance between each consecutive pair of contour
+    points to approximate the contour's perimeter. Note: the closing
+    distance between the last and first point is computed but not added to
+    `length` before it is returned — this matches the existing behaviour
+    and has been left unchanged here.
+    """
     length = 0
 
     for i in range(1, len(contour)):
@@ -1142,6 +2010,46 @@ def measure_contour_length(contour):
 
 
 def gray_mean_twin(grain_stats, folder, brightness, contrast, plot=False, correction_method=False):
+    """
+    Compute per-grain mean grayscale intensity, using skeleton pixels for twins.
+
+    Parameters
+    ----------
+    grain_stats : list of Grain
+        List of Grain objects; twin grains use SkeletonCoord pixels, others
+        use the full PixelList.
+    folder : str
+        Path to a folder of PNG images (one per acquisition orientation).
+    brightness : float
+        Brightness adjustment percentage applied to every image before
+        sampling (see adjust_brightness_contrast).
+    contrast : float
+        Contrast adjustment percentage applied to every image before
+        sampling.
+    plot : bool, optional
+        If True, displays each orientation image with the sampled grain
+        pixels overlaid as scatter points (default False).
+    correction_method : bool, optional
+        If True, applies an additional CLAHE + contrast + normalization
+        pipeline to each image before sampling (default False).
+
+    Returns
+    -------
+    grain_stats : list of Grain
+        The input list, with each grain's Position and GrayMean updated.
+    result : ndarray
+        Mean (across all grains) intensity for each image in the stack.
+
+    Purpose
+    -------
+    Same general purpose as gray_mean, but specialised for the twin-analysis
+    stage: twin grains are sampled using their (thin) SkeletonCoord pixels
+    rather than their full pixel area, since twin boundaries/cores are more
+    representative of the underlying orientation than the full grain area
+    once twins have been further subdivided. Optionally applies
+    brightness/contrast and CLAHE-based normalization before sampling, and
+    can visualise sampled pixels per image for debugging.
+    """
     files = sorted(glob.glob(os.path.join(folder, '*.png')), key=extract_number2)
     num_grains = len(grain_stats)
     num_images = len(files)
@@ -1246,6 +2154,73 @@ def adjust_brightness_contrast(image, brightness_pct, contrast_pct):
 
 # %% MAIN FUNCTION
 def orientation_and_classification(orientation_path, grains_image_path, twins_image_path, image_name):
+    """
+    Full pipeline: extract grains and twins, classify twin types, and render results.
+
+    Parameters
+    ----------
+    orientation_path : str
+        Folder containing the per-orientation grayscale image stack used to
+        estimate crystallographic orientation for every grain.
+    grains_image_path : str
+        Path to the grain-boundary segmentation image (e.g. model output
+        marking grain boundaries).
+    twins_image_path : str
+        Path to the twin-boundary segmentation image (model output marking
+        twin boundaries).
+    image_name : str
+        Identifier/path for the image being processed (kept for signature
+        consistency; not directly used in the body beyond assignment to
+        img_study).
+
+    Returns
+    -------
+    final_image : ndarray
+        BGR image with grain and twin contours drawn (color-coded by twin
+        type: green = Tension, blue = Compression, red = unclassified twin,
+        black = normal grain boundary), flipped/rotated to the original
+        orientation.
+    FinalPlot_rgb : ndarray
+        RGB orientation colour map image, combining the grain orientation
+        colouring (from Grain_Orientation.grain_orientation) with the
+        dilated contour overlay, rotated/flipped to match final_image's
+        orientation.
+
+    Purpose
+    -------
+    This is the top-level driver for the whole grain/twin analysis pipeline.
+    At a high level it:
+    1. Loads the grain and twin boundary segmentation images and
+       skeletonizes both.
+    2. Extracts twin grain objects directly from the dilated twin skeleton,
+       then removes the twin regions from the grain skeleton so grains can
+       be extracted cleanly from what remains.
+    3. Extracts grain objects from the remaining skeleton.
+    4. Uses a spatial index (STRtree) to find which grains overlap which
+       twins above a near-total overlap threshold, flagging those grains
+       as twins.
+    5. Repeatedly estimates per-grain orientation from the orientation
+       image stack (gray_mean + Peaks_Optimized), checks orientation
+       integrity (check_peaks), and computes neighbour relationships
+       (get_optimized_neighbours).
+    6. Finds "friend" grains (very similar orientation) among each twin's
+       neighbours and records those relationships.
+    7. Resolves any pixel overlaps between at-risk grains.
+    8. Rebuilds a clean label image (grain_matrix2) from the resolved
+       grains, fills in any leftover unlabelled regions as new grains, and
+       recomputes smoothed/dilated contours for every grain.
+    9. Filters out very small grains, decomposes twins into branches
+       (decompose_twins_grains / _2), identifies parent grains for twins
+       and splits any twin spanning two distinct parents
+       (find_parents_separate_twins), and classifies each twin's type
+       (grain_twin_analysis -> check_twin_type).
+    10. Marks parent grains (IsParents) for any twin successfully typed as
+       Tension or Compression.
+    11. Renders the final contour overlay image (color-coded by twin type)
+       and a full orientation colour map, both transformed back to the
+       original image orientation, and returns both.
+    """
+
 
     #Initialisation
     print("Grains Process Starting...")
