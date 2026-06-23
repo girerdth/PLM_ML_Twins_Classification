@@ -1,30 +1,32 @@
 # PLM ML Twins Classification
 
-## Overview
-A machine learning application for twins classification and grain segmentation using deep learning models, with a user-friendly GUI interface.
-
-## Publication
-
-Please read the publication at https://www.sciencedirect.com/science/article/pii/S2590049826001566 to understand more about the work. 
-
+A machine learning application for twin boundary classification and grain segmentation in metallic microstructures, built around a Tkinter GUI and YOLOv8-based segmentation models.
 
 ## Project Overview
 
-This project provides tools for analyzing metallic microstructures, specifically focusing on:
-- **Twins Classification**: Identifying and classifying twin boundaries in crystalline materials
-- **Grain Segmentation**: Segmenting individual grains within EBSD (Electron Backscatter Diffraction) images
-- **Pseudocolour Image Processing**: Converting and processing orientation maps into pseudocolour images for better visualization
+This project analyses Polarised Light Microscopy (PLM) images of metallic alloys to:
+
+- **Segment grains** from orientation/pseudocolour images
+- **Detect and classify twin boundaries** (Tension vs. Compression) using deep learning
+- **Generate pseudocolour images** from stacks of grayscale orientation images, as a substitute for EBSD-style orientation mapping
+
+The published methodology behind this approach is described in the paper below.
+
+## Publication
+
+For the full methodology and validation of this technique, see:
+
+[https://www.sciencedirect.com/science/article/pii/S2590049826001566](https://www.sciencedirect.com/science/article/pii/S2590049826001566)
 
 ## Features
 
-- **Interactive GUI**: User-friendly Tkinter-based interface for image processing
-- **Image Processing Capabilities**:
-  - Load and display pseudocolour images (PNG, JPG, JPEG formats)
-  - Create pseudocolour images from orientation data
-  - Simple grain segmentation using contour detection
-  - Advanced twins classification with PLM (Polarized Light Microscopy) mapping
-- **Deep Learning Models**: YOLOv8-based models for accurate segmentation and classification
-- **Real-time Visualization**: Side-by-side display of segmentation results and PLM maps
+- **Interactive GUI** (Tkinter) for loading images, generating pseudocolour maps, and running segmentation/classification
+- **Resolution-aware processing** — the GUI requires the image resolution (µm/px) before unlocking segmentation, and warns if the resolution falls outside the model's training range
+- **Two processing modes**:
+  - *Simple Segmentation* — fast grain boundary detection
+  - *Twins Classification* — full twin detection and classification, combined with a PLM orientation map
+- **YOLOv8-based models** for segmentation and classification
+- **Side-by-side visualisation** of segmentation results and PLM maps
 
 ## Installation
 To set up the project on your local machine, follow these steps:
@@ -45,28 +47,44 @@ Execute the main script to launch the GUI:
 ```
 python Twins_Classification.py
 ```
-### GUI Features
-The application provides four main buttons:
-1. Select Image: Open a file dialog to load a pseudocolour image
-2. Create Pseudocolour: Convert the selected images to pseudocolour representation (We recommend to select 0 degree, 40 degrees and 80 degrees)
-3. Simple Segmentation: Perform basic grain segmentation
-4. Twins Classification: Run advanced twins classification with PLM mapping
+### GUI buttons
+
+| Button | Description |
+|---|---|
+| **Select Image** | Load an existing pseudocolour image (PNG/JPG/JPEG) |
+| **Create Pseudocolour** | Generate a pseudocolour image from grayscale orientation images |
+| **Simple Segmentation** | Run basic grain boundary detection |
+| **Twins Classification** | Run full twin detection/classification with PLM mapping |
 
 ### Workflow
-1. Click "Select Image" to load a pseudocolour image (PNG/JPG/JPEG) or Click "Create Pseudocolour" to generate pseudocolour visualization from PLM images
-2. Choose either:
-    - "Simple Segmentation" for basic grain boundary detection.
-    - "Twins Classification" for advanced analysis with PLM mapping. Will show results in the side-by-side display panels.
-3. If you select "Twins Classification", you will need to give a folder for the corresponding image where you have stored the 18 images (or 36) for the different orientation angles. You will need to register your images. 
 
-### Example for Twins Classification
+1. **Load or generate an image**
+   Click **Select Image** to load a pseudocolour image directly, or click **Create Pseudocolour** and choose three grayscale orientation images (0°, 40°, and 80° are recommended) to build one.
 
-1. First step, after clicking on "Create Pseudocolour", 3 greyscale images needs to be selected and then, the name of the pseudocolour image needs to be saved. 
-![files/media/step1.png](files/media/step1.png)
-2. Resolution in µm/px needs to be entered. The image is resize to 640 pixels and the new resolution is measured to make sure it is below the threshold of the ML model.
-![files/media/step2.png](files/media/step2.png)
-3. Finally, if "Twins Classification" is selected, the orientation folder where all the greyscale images are stored needs to be selected and the final result will be displayed. 
- ![files/media/step3.png](files/media/step3.png)
+2. **Enter the image resolution**
+   Once an image is loaded, a resolution panel appears below the toolbar. Enter the resolution in **µm/px** and click **Confirm**.
+   - The GUI resizes the image to 640 px wide internally (matching the model's input size) and recalculates the equivalent resolution at that size.
+   - If the recalculated resolution is **at or below the model's threshold (0.39 µm/px)**, processing is unlocked with a confirmation message.
+   - If it's **above the threshold**, processing is still unlocked, but the GUI warns that the model was not trained at this resolution and results may be unreliable.
+   - Editing the value after confirming re-locks processing until you confirm again.
+
+3. **Run processing**
+   - **Simple Segmentation** for grain boundaries only.
+   - **Twins Classification** for full twin detection — you'll be prompted to select the folder containing the 18 (or 36) grayscale orientation images for that sample, used to estimate crystallographic orientation. Results appear in the side-by-side display panels.
+
+### Example: full Twins Classification workflow
+
+1. Click **Create Pseudocolour**, select the three grayscale images, and save the resulting pseudocolour image.
+
+   ![step1](files/media/step1.png)
+
+2. Enter the resolution (µm/px). The GUI checks it against the model's training threshold after resizing to 640 px.
+
+   ![step2](files/media/step2.png)
+
+3. Select the orientation folder and view the final classification result.
+
+   ![step3](files/media/step3.png)
 
 ### Project Structure
 ```Code
@@ -75,84 +93,69 @@ PLM_ML_Twins_Classification/
 ├── Terminal_method.py         # Terminal-based processing methods
 ├── requirements.txt           # Python dependencies
 ├── source_code/
-│   ├── pseudoimage.py        # Pseudocolour image generation
-│   └── run_models.py         # ML model execution (simplify & amplify methods)
+│   ├── pseudoimage.py         # Pseudocolour image generation
+│   ├── run_models.py          # ML model execution (simplify & amplify methods)
+│   ├── Grain_functions.py     # Grain/twin geometry, overlap resolution, contour utilities
+│   └── Grain_Orientation.py   # Orientation colour-mapping
 ├── data/                      # Input data directory
 ├── models/                    # Pre-trained ML models
-├── files/                     # Processing output files
-├── runs/                      # Training/inference runs
-└── .idea/                     # IDE configuration
+├── files/                     # Processing output files and media
+├── segmentation_results/      # Saved segmentation/classification outputs
+└── .idea/ 
 ```
-## Key Dependencies
-### Core Libraries
+## Key dependencies
 
-tkinter: GUI framework (built-in with Python)
+**Core**
+- `tkinter` — GUI (built-in)
+- `opencv-python` (`cv2`) — image processing
+- `Pillow` — image display in GUI
+- `numpy`, `scipy` — numerical computing
 
-OpenCV (cv2): Image processing
+**Machine learning**
+- `torch` — deep learning framework
+- `ultralytics` — YOLOv8 segmentation/classification models
+- `scikit-image` — advanced image processing (skeletonisation, contours, regionprops)
 
-Pillow: Image display in GUI
+**Materials science / geometry**
+- `shapely` — polygon geometry for grain/twin overlap analysis
+- `skan` — skeleton graph analysis (branch decomposition)
+- `orix`, `diffpy.structure` — crystallographic orientation analysis (where applicable)
 
-NumPy: Numerical operations
+See `requirements.txt` for exact pinned versions, including:
 
-SciPy: Scientific computing
+| Package | Version |
+|---|---|
+| Python | ≥ 3.8 |
+| PyTorch | 2.3.1 |
+| Ultralytics | 8.2.51 |
+| OpenCV | 4.11.0.86 |
+| NumPy | 1.26.4 |
+| Pandas | 2.3.1 |
+| Matplotlib | 3.10.3 |
+| scikit-image | 0.25.2 |
 
-### Machine Learning
+## Technical details
 
-PyTorch: Deep learning framework
+### Main components
 
-Ultralytics YOLOv8: Object detection and segmentation models
+- **`App` (Twins_Classification.py)** — manages the GUI: image loading/display, the resolution confirmation panel, and triggering segmentation/classification.
+- **`pseudoimage` module** — builds pseudocolour images from orientation-stack grayscale images, with contrast/CLAHE enhancement.
+- **`run_models` module** — wraps YOLOv8 inference:
+  - `simplify_method` — basic segmentation
+  - `amplify_method` — full twins classification
+- **`Grain_functions` / orientation pipeline** — grain extraction from skeletons, twin/grain overlap resolution, neighbour-finding, misorientation-angle calculations, and twin-type classification (Tension/Compression).
 
-scikit-image: Advanced image processing
+### Image processing pipeline
 
-### Materials Science
-
-ORIX: Crystallographic orientation analysis
-
-diffpy.structure: Crystal structure handling
-
-scikit-learn: Machine learning utilities
-
-## Technical Details
-
-### Main Components
-1. App Class: Manages the GUI and user interactions
-- Image loading and display
-- Pseudocolour generation
-- Segmentation execution
-2. pseudoimage Module: Handles pseudocolour image creation
-- Color mapping from orientation data
-- Image enhancement
-3. run_models Module: Executes ML inference
-- simplify_method: Basic segmentation
-- amplify_method: Advanced twins classification
-### Image Processing Pipeline
-1. Load EBSD image
-2. Generate pseudocolour representation
-3. Apply segmentation model
-4. Overlay contours on original image
-5. Display results with PLM mapping
-   
-## Requirements
-All dependencies are listed in requirements.txt. Key versions:
-
-Python >= 3.8
-
-PyTorch 2.3.1
-
-Ultralytics 8.2.51
-
-OpenCV 4.11.0.86
-
-NumPy 1.26.4
-
-Pandas 2.3.1
-
-Matplotlib 3.10.3
-
-scikit-image 0.25.2
+1. Load (or generate) the pseudocolour image
+2. Confirm image resolution (µm/px); check against the model's training threshold at 640 px width
+3. Run the segmentation or classification model
+4. Extract grains/twins from the model output, resolve overlaps, and estimate crystallographic orientation from the orientation image stack
+5. Classify twin type by misorientation angle relative to identified parent grains
+6. Overlay contours on the pseudocolour image and display alongside the PLM orientation map
 
 ## Author
-Thomas Girerd
 
+**Thomas Girerd**
 Created: February 10, 2026
 
